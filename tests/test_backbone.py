@@ -34,3 +34,34 @@ def test_forward_tokens_matches_timm_forward_features_without_tt_registers():
     ours = bb.forward_tokens(x)
     theirs = bb.model.forward_features(x)
     assert torch.allclose(ours, theirs, atol=1e-6)
+
+
+def test_tt_registers_are_inserted_between_prefix_and_patches():
+    bb = tiny_backbone(reg_tokens=2)
+    bb.set_tt_registers(3)
+    t = bb.forward_tokens(torch.randn(1, 3, 56, 56))
+    assert t.shape[1] == 1 + 2 + 3 + 16
+    assert bb.tt_reg_slice() == slice(3, 6)
+    assert bb.patch_slice() == slice(6, None)
+    assert bb.num_patches((56, 56)) == 16
+
+
+def test_tt_registers_change_patch_outputs_only_through_attention():
+    # With zero-initialised registers and a random model, patch outputs differ from the
+    # no-register run (attention now has extra keys). This guards against silently
+    # dropping the tokens before the blocks.
+    bb = tiny_backbone()
+    x = torch.randn(1, 3, 56, 56)
+    base = bb.forward_features(x)
+    bb.set_tt_registers(1)
+    with_reg = bb.forward_features(x)
+    assert base.shape == with_reg.shape
+    assert not torch.allclose(base, with_reg)
+
+
+def test_set_tt_registers_rejects_negative():
+    import pytest
+
+    bb = tiny_backbone()
+    with pytest.raises(ValueError):
+        bb.set_tt_registers(-1)
