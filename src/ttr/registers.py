@@ -10,11 +10,11 @@ Diagnostics: outlier_fraction (H1) and attention_entropy.
 
 from __future__ import annotations
 
-import json  # noqa: F401
+import json
 import math
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass  # noqa: F401
-from pathlib import Path  # noqa: F401
+from dataclasses import asdict, dataclass
+from pathlib import Path
 
 import torch
 from torch import Tensor
@@ -199,3 +199,31 @@ def load_register_neurons(path: str | Path) -> RegisterNeurons:
         layer_to_neurons={int(k): list(v) for k, v in d["layer_to_neurons"].items()},
         stats=OutlierStats(**d["stats"]),
     )
+
+
+def install_test_time_registers(bb: Backbone, rn: RegisterNeurons):
+    """For each (layer, neuron): zero the neuron on patch tokens and write the max patch
+    activation into a test-time register token (neurons round-robin over registers).
+    Returns the hook handles; remove them to restore the plain model.
+    """
+    if bb.num_tt_reg < 1:
+        raise RuntimeError("Backbone has no test-time registers; call set_tt_registers(n>=1) first")
+    handles = []
+    for layer, neurons in rn.layer_to_neurons.items():
+        if not neurons:
+            continue
+        idx = torch.tensor(sorted(neurons))
+        reg_of = torch.arange(len(idx)) % bb.num_tt_reg
+
+        def hook(module, inp, out, idx=idx, reg_of=reg_of):
+            out = out.clone()
+            ps, rs = bb.patch_slice(), bb.tt_reg_slice()
+            idx_d = idx.to(out.device)
+            peak = out[:, ps][..., idx_d].max(dim=1).values  # (B, n)
+            out[:, ps, idx_d] = 0.0
+            reg_rows = rs.start + reg_of.to(out.device)  # (n,)
+            out[:, reg_rows, idx_d] = peak
+            return out
+
+        handles.append(bb.add_mlp_hook(layer, hook))
+    return handles
