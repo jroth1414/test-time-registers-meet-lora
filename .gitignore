@@ -36,3 +36,6 @@ docs/project_rubric_transformers.png
 Thumbs.db
 .vscode/
 .idea/
+
+# Subagent-driven-development scratch (ledgers, briefs, review packages)
+.superpowers/
