@@ -1,0 +1,30 @@
+# LaTeX build artifacts (keep proposal.pdf, it is the deliverable)
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fdb_latexmk
+*.fls
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Experiment data and checkpoints (never commit)
+data/
+checkpoints/
+*.pth
+*.pt
+*.safetensors
+wandb/
+runs/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
