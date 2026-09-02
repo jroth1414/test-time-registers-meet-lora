@@ -52,11 +52,12 @@ proposal/proposal.pdf                      compiled proposal, the file that gets
 Keep the root to CLAUDE.md, config files, and top-level directories; reference material goes
 under `docs/`.
 
-There is no experiment code yet. When it is added, keep this shape so the paper's factorial maps
-onto the tree: `src/` (backbone wrappers, register-neuron detection, LoRA injection, seg heads,
-metrics), `configs/` (one YAML per factorial cell), `scripts/` (train/eval entry points),
-`results/` (committed CSVs and plots only), `data/` (gitignored). Record the exact commands here
-once they exist; do not leave future sessions to guess them.
+Experiment code lives in `src/ttr/` (installed editable as `ttr`), tests in `tests/`, run
+configs in `configs/`, outputs in `results/<run_id>/`, datasets under `data/` (gitignored).
+Implementation plans are in `docs/superpowers/plans/`: read the master plan
+(`2026-09-02-00-master-plan.md`) plus exactly one chunk file per session, and log finished chunks
+in `docs/superpowers/plans/PROGRESS.md`. The master plan's "Shared interfaces" block is the
+contract between chunks; if code on disk disagrees with it, fix the code, not the contract.
 
 ## Commands
 
@@ -71,6 +72,20 @@ The proposal must stay **exactly one page**. Check the log line `Output written 
 after every edit. If it spills, trim prose before touching the layout: the geometry, `\small`
 body, and two-column references are already at their limits. pandoc, LibreOffice and wkhtmltopdf
 are not installed; pdflatex/xelatex and Chrome are.
+
+**Python environment** (PowerShell):
+
+```
+.\.venv\Scripts\Activate.ps1
+pytest                                       # whole suite, CPU only, < 60 s
+pytest tests/test_config.py -v -k roundtrip  # one test
+ruff check src tests; ruff format src tests
+python -m ttr.run --config configs/debug_synthetic.yaml   # CPU smoke run (after chunk 7)
+```
+
+Torch was installed from the cu128 index and is deliberately absent from `pyproject.toml`:
+`pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128`, then
+`pip install -e .[dev]`.
 
 **Environment facts:** Windows 11, PowerShell primary with Git Bash available, Python 3.11.9,
 git 2.55, one NVIDIA RTX 5070 Ti (16 GB). The proposal says "one 24 GB GPU"; the local card is
