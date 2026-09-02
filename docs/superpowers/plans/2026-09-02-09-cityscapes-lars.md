@@ -435,4 +435,21 @@ git add src/ttr tests configs/cityscapes configs/lars
 git commit -m "feat: LaRS proxy metrics and evaluator hook; Cityscapes and LaRS factorials"
 ```
 
-Append the chunk line to `PROGRESS.md`. Cityscapes images are 2048x1024; at `img_size=224` the centre crop discards most of the frame, so for the paper set `data.img_size=448` for Cityscapes and LaRS in `make_factorial.py` (patch-14 backbones accept 448) and note the batch size drop to 8.
+Before generating those configs, make the resolution explicit in `scripts/make_factorial.py`: Cityscapes frames are 2048x1024 and LaRS frames are wide too, so a 224 px centre crop discards most of the scene. In `cell_config`, replace the fixed 224 with
+
+```python
+    img = 448 if dataset in ("cityscapes", "lars") else 224
+    batch = 8 if img == 448 else 16
+```
+
+and use `img` for both `backbone.img_size` and `data.img_size`, `batch` for `data.batch_size`. Extend `tests/test_factorial.py`:
+
+```python
+def test_factorial_high_res_datasets_use_448(tmp_path):
+    p = write_configs(tmp_path, dataset="lars", seeds=[0], epochs=1, root="data/lars")[0]
+    cfg = yaml.safe_load(p.read_text())
+    assert cfg["data"]["img_size"] == 448 and cfg["backbone"]["img_size"] == 448
+    assert cfg["data"]["batch_size"] == 8
+```
+
+Append the chunk line to `PROGRESS.md`.
