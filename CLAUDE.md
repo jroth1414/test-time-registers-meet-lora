@@ -21,8 +21,8 @@ has checked what happens under LoRA fine-tuning. We test three hypotheses:
 | H3 | Gain grows with homogeneous-background fraction; largest on maritime imagery (LaRS), larger for CLIP than DINOv2 | no correlation with background fraction, or ordering reversed |
 
 The authoritative statement of the design is `proposal/proposal.tex`. The reasoning behind the
-choice, and the alternatives rejected, live in `research_ideas.md` (Ideas A-G) and
-`research_ideas_applied.md` (Ideas H-N). This project is Idea A with LaRS added as the third dataset.
+choice, and the alternatives rejected, live in `docs/research_ideas.md` (Ideas A-G) and
+`docs/research_ideas_applied.md` (Ideas H-N). This project is Idea A with LaRS added as the third dataset.
 
 ## Hard dates
 
@@ -40,13 +40,17 @@ WACV 2027 main track is closed (round 2 was 2026-08-28). Do not plan around it.
 ## Repository layout
 
 ```
-CourseOutline_705.744.8X.FA26.pdf   course calendar (read-only input, do not edit)
-project_rubric_transformers.png     grading rubric (read-only input)
-research_ideas.md                   idea shortlist A-G with venue/timing analysis
-research_ideas_applied.md           applied ideas H-N tied to CVPR/WACV workshops
-proposal/proposal.tex               one-page proposal (LaTeX + TikZ block diagram)
-proposal/proposal.pdf               compiled proposal, the file that gets uploaded
+CLAUDE.md                                  this file (must stay at the root)
+docs/CourseOutline_705.744.8X.FA26.pdf     course calendar (read-only input, do not edit)
+docs/project_rubric_transformers.png       grading rubric (read-only input)
+docs/research_ideas.md                     idea shortlist A-G with venue/timing analysis
+docs/research_ideas_applied.md             applied ideas H-N tied to CVPR/WACV workshops
+proposal/proposal.tex                      one-page proposal (LaTeX + TikZ block diagram)
+proposal/proposal.pdf                      compiled proposal, the file that gets uploaded
 ```
+
+Keep the root to CLAUDE.md, config files, and top-level directories; reference material goes
+under `docs/`.
 
 There is no experiment code yet. When it is added, keep this shape so the paper's factorial maps
 onto the tree: `src/` (backbone wrappers, register-neuron detection, LoRA injection, seg heads,
@@ -103,7 +107,7 @@ for CLIP.
 
 ## Rubric requirements the paper must visibly satisfy
 
-The rubric (`project_rubric_transformers.png`) weights Intro and Hypotheses/Method at 26 points
+The rubric (`docs/project_rubric_transformers.png`) weights Intro and Hypotheses/Method at 26 points
 each, and Related Work, Application, Conclusions at 16 each. Things that cost points if missing:
 
 - A **block diagram** of the method (the TikZ figure in the proposal is the seed; keep it updated).
