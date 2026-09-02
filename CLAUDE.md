@@ -41,8 +41,8 @@ WACV 2027 main track is closed (round 2 was 2026-08-28). Do not plan around it.
 
 ```
 CLAUDE.md                                  this file (must stay at the root)
-docs/CourseOutline_705.744.8X.FA26.pdf     course calendar (read-only input, do not edit)
-docs/project_rubric_transformers.png       grading rubric (read-only input)
+docs/CourseOutline_705.744.8X.FA26.pdf     course calendar (local only, gitignored, never publish)
+docs/project_rubric_transformers.png       grading rubric (local only, gitignored, never publish)
 docs/research_ideas.md                     idea shortlist A-G with venue/timing analysis
 docs/research_ideas_applied.md             applied ideas H-N tied to CVPR/WACV workshops
 proposal/proposal.tex                      one-page proposal (LaTeX + TikZ block diagram)

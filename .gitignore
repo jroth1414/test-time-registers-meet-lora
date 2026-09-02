@@ -23,6 +23,10 @@ checkpoints/
 wandb/
 runs/
 
+# Course materials stay local; do not publish
+docs/CourseOutline_705.744.8X.FA26.pdf
+docs/project_rubric_transformers.png
+
 # OS / editor
 .DS_Store
 Thumbs.db
