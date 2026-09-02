@@ -1,6 +1,9 @@
+import pytest
 import torch
+from torch import nn
 
-from ttr.backbone import build_backbone, normalization_for, tiny_backbone
+import ttr.backbone as backbone_mod
+from ttr.backbone import Backbone, build_backbone, normalization_for, tiny_backbone
 from ttr.config import BackboneCfg
 
 
@@ -146,4 +149,66 @@ def test_build_backbone_enables_attention_capture_flag():
 def test_normalization_for_tiny_falls_back_to_imagenet():
     bb = tiny_backbone()
     mean, std = normalization_for(bb)
-    assert len(mean) == 3 and len(std) == 3
+    assert mean == [0.485, 0.456, 0.406]
+    assert std == [0.229, 0.224, 0.225]
+
+
+def test_forward_tokens_uses_checkpoint_seq_when_grad_checkpointing_enabled(monkeypatch):
+    bb = tiny_backbone(depth=2, embed_dim=32, heads=2, img=56, patch=14)
+    calls = {"n": 0}
+    real_checkpoint_seq = backbone_mod.checkpoint_seq
+
+    def wrapper(functions, x, *args, **kwargs):
+        calls["n"] += 1
+        return real_checkpoint_seq(functions, x, *args, **kwargs)
+
+    monkeypatch.setattr(backbone_mod, "checkpoint_seq", wrapper)
+
+    bb.model.set_grad_checkpointing(True)
+    x = torch.randn(2, 3, 56, 56, requires_grad=True)
+    with torch.enable_grad():
+        out = bb.forward_tokens(x)
+    assert calls["n"] == 1
+    assert out.shape == (2, 1 + 16, 32)
+
+
+def test_forward_tokens_does_not_use_checkpoint_seq_when_flag_off(monkeypatch):
+    bb = tiny_backbone(depth=2, embed_dim=32, heads=2, img=56, patch=14)
+    calls = {"n": 0}
+    real_checkpoint_seq = backbone_mod.checkpoint_seq
+
+    def wrapper(functions, x, *args, **kwargs):
+        calls["n"] += 1
+        return real_checkpoint_seq(functions, x, *args, **kwargs)
+
+    monkeypatch.setattr(backbone_mod, "checkpoint_seq", wrapper)
+
+    x = torch.randn(2, 3, 56, 56, requires_grad=True)
+    with torch.enable_grad():
+        bb.forward_tokens(x)
+    assert calls["n"] == 0
+
+
+def test_capture_rejects_unknown_target_before_installing_hooks():
+    bb = tiny_backbone(depth=2)
+    with pytest.raises(ValueError):
+        bb.capture("bogus", layers=[])
+
+
+def test_capture_attn_with_fused_attention_raises_before_installing_hooks():
+    bb = tiny_backbone(depth=2, heads=2)
+    assert all(blk.attn.fused_attn for blk in bb.model.blocks)
+    with pytest.raises(RuntimeError):
+        bb.capture("attn")
+    for blk in bb.model.blocks:
+        assert len(blk.attn.attn_drop._forward_hooks) == 0
+
+
+def test_backbone_rejects_non_vision_transformer():
+    with pytest.raises(TypeError):
+        Backbone(nn.Linear(2, 2))
+
+
+def test_build_backbone_rejects_unknown_registers_mode():
+    with pytest.raises(ValueError):
+        build_backbone(BackboneCfg(name="tiny", pretrained=False, registers="bogus"))

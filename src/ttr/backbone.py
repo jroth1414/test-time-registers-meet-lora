@@ -9,10 +9,19 @@ from collections.abc import Callable
 
 import timm
 import torch
+from timm.models._manipulate import checkpoint_seq
 from timm.models.vision_transformer import VisionTransformer
 from torch import Tensor, nn
 
 from ttr.config import BackboneCfg
+
+# what -> (module_getter, pick) for Backbone.capture; validated once, up front, so a
+# bad `what` or an incompatible fused-attention state raises before any hook is installed.
+_CAPTURE_TARGETS: dict[str, tuple[Callable[[nn.Module], nn.Module], Callable]] = {
+    "resid": (lambda blk: blk, lambda m, inp, out: out),
+    "mlp_act": (lambda blk: blk.mlp.act, lambda m, inp, out: out),
+    "attn": (lambda blk: blk.attn.attn_drop, lambda m, inp, out: inp[0]),
+}
 
 
 class CaptureHandle:
@@ -42,7 +51,6 @@ class Backbone(nn.Module):
         self.num_cls = 1 if model.cls_token is not None else 0
         self.num_trained_reg = int(getattr(model, "num_reg_tokens", 0) or 0)
         self.num_tt_reg = 0
-        self.tt_reg_init = "zeros"
 
     # ---- layout -----------------------------------------------------------------
     def grid(self, img_hw: tuple[int, int]) -> tuple[int, int]:
@@ -73,14 +81,20 @@ class Backbone(nn.Module):
         x = m.patch_embed(x)
         x = m._pos_embed(x)  # prepends cls + trained registers, adds pos embed
         if self.num_tt_reg > 0:
+            # Assumes patch_drop is Identity for all study checkpoints: timm's PatchDropout
+            # keeps only num_prefix_tokens and would drop these test-time registers below if
+            # patch_drop_rate > 0.
             b, _, c = x.shape
             reg = x.new_zeros(b, self.num_tt_reg, c)
             p = self.num_cls + self.num_trained_reg
             x = torch.cat([x[:, :p], reg, x[:, p:]], dim=1)
         x = m.patch_drop(x)
         x = m.norm_pre(x)
-        for blk in m.blocks:
-            x = blk(x)
+        if m.grad_checkpointing and not torch.jit.is_scripting():
+            x = checkpoint_seq(m.blocks, x)
+        else:
+            for blk in m.blocks:
+                x = blk(x)
         return m.norm(x)
 
     def forward_features(self, x: Tensor) -> Tensor:
@@ -106,19 +120,18 @@ class Backbone(nn.Module):
         what="mlp_act": MLP hidden activation after the nonlinearity (B, T, hidden).
         what="attn": attention probabilities (B, heads, T, T); needs fused_attn=False.
         """
+        if what not in _CAPTURE_TARGETS:
+            raise ValueError(f"unknown capture target {what!r}")
+        get_module, pick = _CAPTURE_TARGETS[what]
+
+        indices = self._layers(layers)
+        selected = [self.model.blocks[i] for i in indices]
+        if what == "attn" and any(blk.attn.fused_attn for blk in selected):
+            raise RuntimeError("call set_fused_attention(False) before capturing attention")
+
         handle = CaptureHandle()
-        for i in self._layers(layers):
-            blk = self.model.blocks[i]
-            if what == "resid":
-                mod, pick = blk, lambda m, inp, out: out
-            elif what == "mlp_act":
-                mod, pick = blk.mlp.act, lambda m, inp, out: out
-            elif what == "attn":
-                if blk.attn.fused_attn:
-                    raise RuntimeError("call set_fused_attention(False) before capturing attention")
-                mod, pick = blk.attn.attn_drop, lambda m, inp, out: inp[0]
-            else:
-                raise ValueError(f"unknown capture target {what!r}")
+        for i, blk in zip(indices, selected, strict=True):
+            mod = get_module(blk)
 
             def _hook(m, inp, out, i=i, pick=pick):
                 handle.data[i] = pick(m, inp, out).detach()
@@ -160,6 +173,8 @@ def tiny_backbone(
 
 def build_backbone(cfg: BackboneCfg) -> Backbone:
     if cfg.name == "tiny":
+        # cfg.img_size is ignored here: tiny is fixed at 56 px; dynamic_img_size=True makes
+        # other input sizes still work.
         bb = tiny_backbone(reg_tokens=0)
     else:
         m = timm.create_model(
