@@ -201,7 +201,9 @@ def load_register_neurons(path: str | Path) -> RegisterNeurons:
     )
 
 
-def install_test_time_registers(bb: Backbone, rn: RegisterNeurons):
+def install_test_time_registers(
+    bb: Backbone, rn: RegisterNeurons
+) -> list[torch.utils.hooks.RemovableHandle]:
     """For each (layer, neuron): zero the neuron on patch tokens and write the max patch
     activation into a test-time register token (neurons round-robin over registers).
     Returns the hook handles; remove them to restore the plain model.
@@ -227,3 +229,41 @@ def install_test_time_registers(bb: Backbone, rn: RegisterNeurons):
 
         handles.append(bb.add_mlp_hook(layer, hook))
     return handles
+
+
+@torch.no_grad()
+def attention_entropy(
+    bb: Backbone, loader: Iterable, layers: list[int] | None = None, max_images: int = 64
+) -> dict[str, float]:
+    """Mean Shannon entropy (nats) of attention rows, averaged over heads, layers and images,
+    reported separately for the cls query, the test-time register queries, and patch queries.
+    Leaves fused attention disabled on the backbone.
+    """
+    bb.set_fused_attention(False)
+    dev = next(bb.parameters()).device
+    sums = {"cls": 0.0, "tt_reg": 0.0, "patch": 0.0}
+    counts = {k: 0 for k in sums}
+    seen = 0
+    for batch in loader:
+        x = _images(batch).to(dev)
+        cap = bb.capture("attn", layers=layers)
+        try:
+            bb.forward_tokens(x)
+            for a in cap.data.values():  # (B, heads, T, T)
+                ent = -(a * (a + 1e-12).log()).sum(-1)  # (B, heads, T)
+                ent = ent.mean(1)  # (B, T)
+                groups = {
+                    "cls": ent[:, : bb.num_cls],
+                    "tt_reg": ent[:, bb.tt_reg_slice()],
+                    "patch": ent[:, bb.patch_slice()],
+                }
+                for k, v in groups.items():
+                    if v.numel():
+                        sums[k] += float(v.sum())
+                        counts[k] += v.numel()
+        finally:
+            cap.remove()
+        seen += x.shape[0]
+        if seen >= max_images:
+            break
+    return {k: (sums[k] / counts[k] if counts[k] else float("nan")) for k in sums}

@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 import torch
@@ -6,6 +7,7 @@ from ttr.backbone import tiny_backbone
 from ttr.registers import (
     OutlierStats,
     RegisterNeurons,
+    attention_entropy,
     calibrate_outlier_threshold,
     find_register_neurons,
     install_test_time_registers,
@@ -191,3 +193,13 @@ def test_install_with_two_registers_round_robins_neurons():
     for h in handles:
         h.remove()
     cap.remove()
+
+
+def test_attention_entropy_keys_and_range():
+    bb = tiny_backbone(depth=2, heads=2)
+    bb.set_tt_registers(1)
+    ent = attention_entropy(bb, _loader(n_batches=2), layers=[1], max_images=4)
+    T = 1 + 1 + 16
+    for key in ("cls", "tt_reg", "patch"):
+        assert 0.0 <= ent[key] <= math.log(T) + 1e-6
+    assert bb.model.blocks[1].attn.fused_attn is False  # left disabled on purpose
