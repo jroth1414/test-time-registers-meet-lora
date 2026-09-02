@@ -7,9 +7,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+import timm
 import torch
 from timm.models.vision_transformer import VisionTransformer
 from torch import Tensor, nn
+
+from ttr.config import BackboneCfg
 
 
 class CaptureHandle:
@@ -153,3 +156,41 @@ def tiny_backbone(
     )
     m.eval()
     return Backbone(m)
+
+
+def build_backbone(cfg: BackboneCfg) -> Backbone:
+    if cfg.name == "tiny":
+        bb = tiny_backbone(reg_tokens=0)
+    else:
+        m = timm.create_model(
+            cfg.name,
+            pretrained=cfg.pretrained,
+            num_classes=0,
+            img_size=cfg.img_size,
+            dynamic_img_size=True,
+        )
+        m.eval()
+        bb = Backbone(m)
+
+    if cfg.registers == "trained":
+        if bb.num_trained_reg == 0:
+            raise ValueError(
+                f"{cfg.name} has no trained registers; use a *_reg4_* "
+                "checkpoint for registers=trained"
+            )
+    elif cfg.registers == "test_time":
+        bb.set_tt_registers(cfg.num_test_time_registers)
+    elif cfg.registers != "none":
+        raise ValueError(f"unknown registers mode {cfg.registers!r}")
+
+    if cfg.capture_attention:
+        bb.set_fused_attention(False)
+    return bb
+
+
+def normalization_for(bb: Backbone) -> tuple[list[float], list[float]]:
+    """Mean/std the checkpoint was trained with; ImageNet defaults for random models."""
+    pc = getattr(bb.model, "pretrained_cfg", None) or {}
+    mean = list(pc.get("mean", (0.485, 0.456, 0.406)))
+    std = list(pc.get("std", (0.229, 0.224, 0.225)))
+    return mean, std

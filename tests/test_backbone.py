@@ -1,6 +1,7 @@
 import torch
 
-from ttr.backbone import tiny_backbone
+from ttr.backbone import build_backbone, normalization_for, tiny_backbone
+from ttr.config import BackboneCfg
 
 
 def test_tiny_forward_tokens_shape_and_layout():
@@ -116,3 +117,33 @@ def test_add_mlp_hook_can_modify_activations():
     assert torch.all(cap.data[0][..., 3] == 0)
     hd.remove()
     cap.remove()
+
+
+def test_build_backbone_tiny_applies_test_time_registers():
+    cfg = BackboneCfg(
+        name="tiny",
+        registers="test_time",
+        num_test_time_registers=2,
+        pretrained=False,
+    )
+    bb = build_backbone(cfg)
+    assert bb.num_tt_reg == 2
+    assert bb.forward_tokens(torch.randn(1, 3, 56, 56)).shape[1] == 1 + 2 + 16
+
+
+def test_build_backbone_rejects_trained_registers_on_model_without_them():
+    import pytest
+
+    with pytest.raises(ValueError):
+        build_backbone(BackboneCfg(name="tiny", registers="trained", pretrained=False))
+
+
+def test_build_backbone_enables_attention_capture_flag():
+    bb = build_backbone(BackboneCfg(name="tiny", pretrained=False, capture_attention=True))
+    assert all(not blk.attn.fused_attn for blk in bb.model.blocks)
+
+
+def test_normalization_for_tiny_falls_back_to_imagenet():
+    bb = tiny_backbone()
+    mean, std = normalization_for(bb)
+    assert len(mean) == 3 and len(std) == 3
