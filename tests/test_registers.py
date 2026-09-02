@@ -1,12 +1,18 @@
+from pathlib import Path
+
 import torch
 
 from ttr.backbone import tiny_backbone
 from ttr.registers import (
     OutlierStats,
+    RegisterNeurons,
     calibrate_outlier_threshold,
+    find_register_neurons,
+    load_register_neurons,
     outlier_fraction,
     outlier_mask,
     patch_norms,
+    save_register_neurons,
     score_register_neurons,
     select_register_neurons,
 )
@@ -81,3 +87,44 @@ def test_score_with_no_outliers_returns_zeros():
     acts = {0: torch.randn(1, 4, 3)}
     scores = score_register_neurons(acts, torch.zeros(1, 4, dtype=torch.bool))
     assert torch.all(scores[0] == 0)
+
+
+def test_find_register_neurons_end_to_end_with_planted_neuron(tmp_path: Path):
+    bb = tiny_backbone(depth=2, embed_dim=32, mlp_ratio=2.0)  # hidden = 64
+    loader = _loader(n_batches=4, b=2, seed=3)
+    st = calibrate_outlier_threshold(bb, loader, max_images=8)
+
+    # Plant: make patch token 2 an outlier at the last block AND make neuron 9 of layer 0
+    # fire hard on that token. The detector must recover layer 0 / neuron 9.
+    def boost_resid(module, inp, out):
+        out = out.clone()
+        out[:, bb.prefix_len() + 2] *= 50.0
+        return out
+
+    def fire_neuron(module, inp, out):
+        out = out.clone()
+        out[:, bb.prefix_len() + 2, 9] += 20.0
+        return out
+
+    h1 = bb.model.blocks[-1].register_forward_hook(boost_resid)
+    h2 = bb.add_mlp_hook(0, fire_neuron)
+    rn = find_register_neurons(bb, loader, st, quantile=0.99, max_neurons=4, max_images=8)
+    h1.remove()
+    h2.remove()
+
+    assert isinstance(rn, RegisterNeurons)
+    assert 9 in rn.layer_to_neurons.get(0, [])
+
+    p = tmp_path / "rn.json"
+    save_register_neurons(rn, p)
+    back = load_register_neurons(p)
+    assert back.layer_to_neurons == rn.layer_to_neurons
+    assert back.stats == rn.stats
+
+
+def test_find_register_neurons_returns_empty_when_no_outliers():
+    bb = tiny_backbone(depth=2)
+    loader = _loader(n_batches=2, b=2, seed=5)
+    st = OutlierStats(layer=1, tau=1e9, median=0.0, mad=0.0, k=4.0)  # nothing exceeds tau
+    rn = find_register_neurons(bb, loader, st, quantile=0.0, max_neurons=64, max_images=4)
+    assert rn.layer_to_neurons == {}

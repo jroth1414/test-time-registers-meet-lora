@@ -39,6 +39,13 @@ class OutlierStats:
     k: float
 
 
+@dataclass
+class RegisterNeurons:
+    layer_to_neurons: dict[int, list[int]]
+    stats: OutlierStats
+    scores: dict[int, list[float]] | None = None
+
+
 @torch.no_grad()
 def patch_norms(bb: Backbone, x: Tensor, layer: int = -1) -> Tensor:
     """L2 norm of each patch token in the residual stream after block `layer`. (B, P)"""
@@ -130,3 +137,65 @@ def select_register_neurons(
     for _, layer, n in kept:
         sel.setdefault(layer, []).append(n)
     return {layer: sorted(ns) for layer, ns in sorted(sel.items())}
+
+
+@torch.no_grad()
+def find_register_neurons(
+    bb: Backbone,
+    loader: Iterable,
+    stats: OutlierStats,
+    quantile: float = 0.999,
+    max_neurons: int = 64,
+    max_images: int = 64,
+) -> RegisterNeurons:
+    dev = next(bb.parameters()).device
+    acts_by_layer: dict[int, list[Tensor]] = {layer: [] for layer in range(bb.depth)}
+    masks: list[Tensor] = []
+    seen = 0
+    for batch in loader:
+        x = _images(batch).to(dev)
+        cap_act = bb.capture("mlp_act")
+        cap_res = bb.capture("resid", layers=[stats.layer])
+        try:
+            bb.forward_tokens(x)
+            for layer in range(bb.depth):
+                acts_by_layer[layer].append(cap_act.data[layer][:, bb.patch_slice()].cpu())
+            norms = cap_res.data[stats.layer][:, bb.patch_slice()].norm(dim=-1)
+            masks.append((norms > stats.tau).cpu())
+        finally:
+            cap_act.remove()
+            cap_res.remove()
+        seen += x.shape[0]
+        if seen >= max_images:
+            break
+    acts = {layer: torch.cat(v) for layer, v in acts_by_layer.items()}
+    outlier = torch.cat(masks)
+    scores = score_register_neurons(acts, outlier)
+    # No outlier tokens means nothing to redirect: an empty map, not 64 arbitrary neurons
+    # (a quantile over all-zero scores would otherwise keep everything).
+    if int(outlier.sum()) == 0:
+        sel: dict[int, list[int]] = {}
+    else:
+        sel = select_register_neurons(scores, quantile=quantile, max_neurons=max_neurons)
+    return RegisterNeurons(
+        layer_to_neurons=sel,
+        stats=stats,
+        scores={layer: s.tolist() for layer, s in scores.items()},
+    )
+
+
+def save_register_neurons(rn: RegisterNeurons, path: str | Path) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "layer_to_neurons": {str(k): v for k, v in rn.layer_to_neurons.items()},
+        "stats": asdict(rn.stats),
+    }
+    Path(path).write_text(json.dumps(payload, indent=2))
+
+
+def load_register_neurons(path: str | Path) -> RegisterNeurons:
+    d = json.loads(Path(path).read_text())
+    return RegisterNeurons(
+        layer_to_neurons={int(k): list(v) for k, v in d["layer_to_neurons"].items()},
+        stats=OutlierStats(**d["stats"]),
+    )
