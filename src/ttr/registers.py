@@ -11,7 +11,7 @@ Diagnostics: outlier_fraction (H1) and attention_entropy.
 from __future__ import annotations
 
 import json  # noqa: F401
-import math  # noqa: F401
+import math
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass  # noqa: F401
 from pathlib import Path  # noqa: F401
@@ -93,3 +93,40 @@ def outlier_fraction(
         if max_images is not None and seen >= max_images:
             break
     return hits / max(total, 1)
+
+
+def score_register_neurons(acts: dict[int, Tensor], outlier: Tensor) -> dict[int, Tensor]:
+    """Per-layer, per-neuron score: mean |activation| on outlier tokens minus on normal tokens,
+    divided by the overall std so layers are comparable. acts[l] is (B, P, H) patch-only.
+    Returns zeros for every layer when there are no outlier tokens.
+    """
+    out: dict[int, Tensor] = {}
+    flat_mask = outlier.reshape(-1)
+    for layer, a in acts.items():
+        a2 = a.reshape(-1, a.shape[-1]).abs()
+        if flat_mask.sum() == 0 or (~flat_mask).sum() == 0:
+            out[layer] = torch.zeros(a.shape[-1])
+            continue
+        on = a2[flat_mask].mean(0)
+        off = a2[~flat_mask].mean(0)
+        std = a2.std(0) + 1e-6
+        out[layer] = ((on - off) / std).cpu()
+    return out
+
+
+def select_register_neurons(
+    scores: dict[int, Tensor], quantile: float = 0.999, max_neurons: int = 64
+) -> dict[int, list[int]]:
+    """Keep (layer, neuron) pairs with score >= global quantile, at most max_neurons, best first."""
+    entries = [
+        (float(s), layer, n) for layer, v in scores.items() for n, s in enumerate(v.tolist())
+    ]
+    if not entries:
+        return {}
+    all_scores = torch.tensor([e[0] for e in entries])
+    thresh = torch.quantile(all_scores, quantile).item() if quantile > 0 else -math.inf
+    kept = sorted([e for e in entries if e[0] >= thresh], key=lambda e: -e[0])[:max_neurons]
+    sel: dict[int, list[int]] = {}
+    for _, layer, n in kept:
+        sel.setdefault(layer, []).append(n)
+    return {layer: sorted(ns) for layer, ns in sorted(sel.items())}
