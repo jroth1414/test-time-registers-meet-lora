@@ -65,3 +65,54 @@ def test_set_tt_registers_rejects_negative():
     bb = tiny_backbone()
     with pytest.raises(ValueError):
         bb.set_tt_registers(-1)
+
+
+def test_capture_resid_per_layer():
+    bb = tiny_backbone(depth=3)
+    h = bb.capture("resid")
+    bb.forward_tokens(torch.randn(2, 3, 56, 56))
+    assert sorted(h.data) == [0, 1, 2]
+    assert h.data[1].shape == (2, 17, 32)
+    h.remove()
+    h.clear()
+    bb.forward_tokens(torch.randn(1, 3, 56, 56))
+    assert h.data == {}
+
+
+def test_capture_mlp_act_has_hidden_width():
+    bb = tiny_backbone(depth=2, embed_dim=32, mlp_ratio=2.0)
+    h = bb.capture("mlp_act", layers=[1])
+    bb.forward_tokens(torch.randn(1, 3, 56, 56))
+    assert list(h.data) == [1]
+    assert h.data[1].shape == (1, 17, 64)
+    h.remove()
+
+
+def test_capture_attn_probabilities_sum_to_one():
+    bb = tiny_backbone(depth=2, heads=2)
+    bb.set_fused_attention(False)
+    h = bb.capture("attn", layers=[0])
+    bb.forward_tokens(torch.randn(1, 3, 56, 56))
+    a = h.data[0]
+    assert a.shape == (1, 2, 17, 17)
+    assert torch.allclose(a.sum(-1), torch.ones(1, 2, 17), atol=1e-5)
+    h.remove()
+
+
+def test_add_mlp_hook_can_modify_activations():
+    bb = tiny_backbone(depth=2)
+    seen = {}
+
+    def zero_neuron_3(module, inp, out):
+        out = out.clone()
+        out[..., 3] = 0
+        seen["ok"] = True
+        return out
+
+    hd = bb.add_mlp_hook(0, zero_neuron_3)
+    cap = bb.capture("mlp_act", layers=[0])
+    bb.forward_tokens(torch.randn(1, 3, 56, 56))
+    assert seen["ok"]
+    assert torch.all(cap.data[0][..., 3] == 0)
+    hd.remove()
+    cap.remove()

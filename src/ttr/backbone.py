@@ -5,6 +5,8 @@ Layout of the token axis, always: [cls] [trained registers] [test-time registers
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import torch
 from timm.models.vision_transformer import VisionTransformer
 from torch import Tensor, nn
@@ -85,6 +87,47 @@ class Backbone(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         return self.forward_features(x)
+
+    # ---- introspection ------------------------------------------------------------
+    def set_fused_attention(self, fused: bool) -> None:
+        for blk in self.model.blocks:
+            blk.attn.fused_attn = fused
+
+    def _layers(self, layers: list[int] | None) -> list[int]:
+        return list(range(self.depth)) if layers is None else list(layers)
+
+    def capture(self, what: str, layers: list[int] | None = None) -> CaptureHandle:
+        """Capture per-layer tensors from the next forward passes.
+
+        what="resid": block output (B, T, C).
+        what="mlp_act": MLP hidden activation after the nonlinearity (B, T, hidden).
+        what="attn": attention probabilities (B, heads, T, T); needs fused_attn=False.
+        """
+        handle = CaptureHandle()
+        for i in self._layers(layers):
+            blk = self.model.blocks[i]
+            if what == "resid":
+                mod, pick = blk, lambda m, inp, out: out
+            elif what == "mlp_act":
+                mod, pick = blk.mlp.act, lambda m, inp, out: out
+            elif what == "attn":
+                if blk.attn.fused_attn:
+                    raise RuntimeError("call set_fused_attention(False) before capturing attention")
+                mod, pick = blk.attn.attn_drop, lambda m, inp, out: inp[0]
+            else:
+                raise ValueError(f"unknown capture target {what!r}")
+
+            def _hook(m, inp, out, i=i, pick=pick):
+                handle.data[i] = pick(m, inp, out).detach()
+
+            handle._handles.append(mod.register_forward_hook(_hook))
+        return handle
+
+    def add_mlp_hook(
+        self, layer: int, fn: Callable[[nn.Module, tuple, Tensor], Tensor | None]
+    ) -> torch.utils.hooks.RemovableHandle:
+        """Forward hook on blocks[layer].mlp.act; fn may return a replacement tensor."""
+        return self.model.blocks[layer].mlp.act.register_forward_hook(fn)
 
 
 def tiny_backbone(
