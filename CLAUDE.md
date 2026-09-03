@@ -112,6 +112,17 @@ The paper is a 3 x 3 factorial per backbone, run on three datasets, three seeds 
   the outlier fraction, not by mIoU alone.
 - **Sweeps:** LoRA rank {4, 8, 16}, target modules ({q,v} vs {q,k,v,o}), number of test-time
   registers {1, 4, 8}, LoRA layer subset, learning rate.
+- **Headline metric:** `final_miou` (last epoch). There is no model selection on the validation
+  set; `best_miou` is the max of the per-epoch curve and is reported for reference only.
+- **Outlier fractions are tau-relative and only comparable within a model** (frozen vs LoRA of the
+  same backbone). Cross-backbone statements use the scale-free `norm_ratio_p999` diagnostic.
+- **Register-neuron maps are resolution-specific.** The factorial at 224 px uses maps under
+  `artifacts/res224/register_neurons/`; the 518 px maps under `artifacts/register_neurons/` are
+  the reproduction of Jiang et al. Both READMEs record the detector flags and the before/after
+  outlier fractions, including failures.
+- **Sanity runs** (5 epochs, one seed) live under `results/sanity/` and are excluded from the
+  analysis; real cells are 10 epochs, three seeds, under `results/<run_id>/`. Run
+  `scripts/run_sweep.ps1 -Filter frozen` before any LoRA or full cell.
 
 Sequence the work so the draft deadline is safe: reproduce Jiang et al. and the outlier diagnostics
 first (weeks 1-2), then the full ADE20K factorial (weeks 3-6), then Cityscapes and LaRS.
