@@ -8,7 +8,7 @@ import numpy as np
 
 ADE20K_NUM_CLASSES = 150
 # Homogeneous-background classes for H3 (0-indexed ADE150 ids): wall, sky, floor, ceiling,
-# road, water, sea. Verify against objectInfo150.csv in the download and adjust if needed.
+# road, water, sea. Verify against objectInfo150.txt in the download and adjust if needed.
 ADE20K_BACKGROUND_IDS = [0, 2, 3, 5, 6, 21, 26]
 
 _SPLIT = {"train": "training", "val": "validation"}
@@ -27,7 +27,8 @@ def ade20k_pairs(root: str | Path, split: str) -> tuple[list[Path], list[Path]]:
     labs = sorted((base / "annotations" / sub).glob("*.png"))
     if not imgs:
         raise FileNotFoundError(f"no ADE20K images under {base / 'images' / sub}; see docs/DATA.md")
-    stems_match = all(img.stem == lab.stem for img, lab in zip(imgs, labs, strict=True))
-    if len(imgs) != len(labs) or not stems_match:
+    if len(imgs) != len(labs):
+        raise ValueError("ADE20K images and annotations do not line up")
+    if any(img.stem != lab.stem for img, lab in zip(imgs, labs, strict=True)):
         raise ValueError("ADE20K images and annotations do not line up")
     return imgs, labs

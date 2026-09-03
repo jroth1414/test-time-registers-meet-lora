@@ -43,5 +43,18 @@ def test_pairs_mismatch_raises(tmp_path: Path):
     extra = root / "ADEChallengeData2016" / "images" / "training" / "ADE_training_99999999.jpg"
     src = root / "ADEChallengeData2016" / "images" / "training" / "ADE_training_00000000.jpg"
     extra.write_bytes(src.read_bytes())
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="do not line up"):
+        ade20k_pairs(root, "train")
+
+
+def test_pairs_stem_mismatch_raises(tmp_path: Path):
+    import pytest
+
+    root = write_fake_ade20k(tmp_path, n=2)
+    # Rename one label file so counts match but stems differ
+    base = root / "ADEChallengeData2016" / "annotations" / "training"
+    old_label = base / "ADE_training_00000000.png"
+    new_label = base / "ADE_training_00000009.png"
+    old_label.rename(new_label)
+    with pytest.raises(ValueError, match="do not line up"):
         ade20k_pairs(root, "train")
