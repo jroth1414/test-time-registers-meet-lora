@@ -12,8 +12,8 @@ import math
 import torch
 from torch import Tensor, nn
 
-from ttr.backbone import Backbone  # noqa: F401
-from ttr.config import LoraCfg  # noqa: F401
+from ttr.backbone import Backbone
+from ttr.config import LoraCfg
 
 
 class LoRALinear(nn.Module):
@@ -49,3 +49,41 @@ class LoRALinear(nn.Module):
     def extra_repr(self) -> str:
         sel = "all" if self.out_index is None else int(self.out_index.numel())
         return f"r={self.r}, alpha={self.alpha}, out={sel}/{self.base.out_features}"
+
+
+_SLICES = {"q": 0, "k": 1, "v": 2}
+
+
+def qkv_out_index(embed_dim: int, targets: list[str]) -> Tensor | None:
+    """Row indices of the fused qkv output for the requested q/k/v slices. None if all
+    three are requested (plain LoRA) or none are."""
+    want = [t for t in ("q", "k", "v") if t in targets]
+    if not want or len(want) == 3:
+        return None
+    rows = [torch.arange(_SLICES[t] * embed_dim, (_SLICES[t] + 1) * embed_dim) for t in want]
+    return torch.cat(rows)
+
+
+def _layers(bb: Backbone, layers) -> list[int]:
+    return list(range(bb.depth)) if layers == "all" else [int(i) for i in layers]
+
+
+def apply_lora(bb: Backbone, cfg: LoraCfg) -> list[str]:
+    if not cfg.enabled:
+        return []
+    bad = set(cfg.targets) - {"q", "k", "v", "o"}
+    if bad:
+        raise ValueError(f"unknown LoRA targets {sorted(bad)}")
+    wrapped: list[str] = []
+    for i in _layers(bb, cfg.layers):
+        attn = bb.model.blocks[i].attn
+        if isinstance(attn.qkv, LoRALinear) or isinstance(attn.proj, LoRALinear):
+            raise RuntimeError(f"blocks.{i}.attn already has LoRA")
+        if any(t in cfg.targets for t in ("q", "k", "v")):
+            idx = qkv_out_index(bb.embed_dim, cfg.targets)
+            attn.qkv = LoRALinear(attn.qkv, cfg.r, cfg.alpha, idx, cfg.dropout)
+            wrapped.append(f"blocks.{i}.attn.qkv")
+        if "o" in cfg.targets:
+            attn.proj = LoRALinear(attn.proj, cfg.r, cfg.alpha, None, cfg.dropout)
+            wrapped.append(f"blocks.{i}.attn.proj")
+    return wrapped
