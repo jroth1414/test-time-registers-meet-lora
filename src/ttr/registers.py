@@ -27,6 +27,8 @@ def _images(batch) -> Tensor:
 
 
 def _resolve_layer(bb: Backbone, layer: int) -> int:
+    if not (-bb.depth <= layer < bb.depth):
+        raise ValueError(f"layer {layer} out of range for depth {bb.depth}")
     return layer % bb.depth
 
 
@@ -73,6 +75,8 @@ def calibrate_outlier_threshold(
         seen += x.shape[0]
         if seen >= max_images:
             break
+    if not norms:
+        raise ValueError("calibration loader yielded no batches")
     n = torch.cat(norms)
     med = n.median().item()
     mad = (n - med).abs().median().item()
@@ -116,7 +120,7 @@ def score_register_neurons(acts: dict[int, Tensor], outlier: Tensor) -> dict[int
             continue
         on = a2[flat_mask].mean(0)
         off = a2[~flat_mask].mean(0)
-        std = a2.std(0) + 1e-6
+        std = a2.std(0, unbiased=False) + 1e-6
         out[layer] = ((on - off) / std).cpu()
     return out
 
@@ -148,9 +152,18 @@ def find_register_neurons(
     max_neurons: int = 64,
     max_images: int = 64,
 ) -> RegisterNeurons:
+    """Streaming version of score_register_neurons: accumulates per-layer sums instead of
+    buffering every image's activations, so host memory stays O(hidden_width) per layer
+    instead of O(images * tokens * hidden_width).
+    """
     dev = next(bb.parameters()).device
-    acts_by_layer: dict[int, list[Tensor]] = {layer: [] for layer in range(bb.depth)}
-    masks: list[Tensor] = []
+    sum_on: dict[int, Tensor] = {}
+    sum_off: dict[int, Tensor] = {}
+    sum_all: dict[int, Tensor] = {}
+    sumsq_all: dict[int, Tensor] = {}
+    count_on = 0
+    count_off = 0
+    count_all = 0
     seen = 0
     for batch in loader:
         x = _images(batch).to(dev)
@@ -158,25 +171,52 @@ def find_register_neurons(
         cap_res = bb.capture("resid", layers=[stats.layer])
         try:
             bb.forward_tokens(x)
-            for layer in range(bb.depth):
-                acts_by_layer[layer].append(cap_act.data[layer][:, bb.patch_slice()].cpu())
             norms = cap_res.data[stats.layer][:, bb.patch_slice()].norm(dim=-1)
-            masks.append((norms > stats.tau).cpu())
+            mask = (norms > stats.tau).cpu()
+            flat_mask = mask.reshape(-1)
+            n_on = int(flat_mask.sum())
+            n_off = int((~flat_mask).sum())
+            count_on += n_on
+            count_off += n_off
+            count_all += flat_mask.numel()
+            for layer in range(bb.depth):
+                a = cap_act.data[layer][:, bb.patch_slice()].float().cpu()
+                hidden = a.shape[-1]
+                if layer not in sum_all:
+                    sum_on[layer] = torch.zeros(hidden)
+                    sum_off[layer] = torch.zeros(hidden)
+                    sum_all[layer] = torch.zeros(hidden)
+                    sumsq_all[layer] = torch.zeros(hidden)
+                a2 = a.reshape(-1, hidden).abs()
+                sum_all[layer] += a2.sum(0)
+                sumsq_all[layer] += (a2 * a2).sum(0)
+                if n_on:
+                    sum_on[layer] += a2[flat_mask].sum(0)
+                if n_off:
+                    sum_off[layer] += a2[~flat_mask].sum(0)
         finally:
             cap_act.remove()
             cap_res.remove()
         seen += x.shape[0]
         if seen >= max_images:
             break
-    acts = {layer: torch.cat(v) for layer, v in acts_by_layer.items()}
-    outlier = torch.cat(masks)
-    scores = score_register_neurons(acts, outlier)
-    # No outlier tokens means nothing to redirect: an empty map, not 64 arbitrary neurons
-    # (a quantile over all-zero scores would otherwise keep everything).
-    if int(outlier.sum()) == 0:
+
+    # No outlier tokens, or no normal tokens (tau too low): nothing meaningful to redirect,
+    # so return an empty map instead of a quantile over degenerate (all-zero, or undefined) scores.
+    if count_on == 0 or count_off == 0:
         sel: dict[int, list[int]] = {}
+        scores = {layer: torch.zeros_like(s) for layer, s in sum_all.items()}
     else:
+        scores = {}
+        for layer in sum_all:
+            on = sum_on[layer] / count_on
+            off = sum_off[layer] / count_off
+            mean_all = sum_all[layer] / count_all
+            var = (sumsq_all[layer] / count_all - mean_all**2).clamp_min(0)
+            std = var.sqrt() + 1e-6
+            scores[layer] = (on - off) / std
         sel = select_register_neurons(scores, quantile=quantile, max_neurons=max_neurons)
+
     return RegisterNeurons(
         layer_to_neurons=sel,
         stats=stats,
@@ -184,12 +224,14 @@ def find_register_neurons(
     )
 
 
-def save_register_neurons(rn: RegisterNeurons, path: str | Path) -> None:
+def save_register_neurons(rn: RegisterNeurons, path: str | Path, meta: dict | None = None) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "layer_to_neurons": {str(k): v for k, v in rn.layer_to_neurons.items()},
         "stats": asdict(rn.stats),
     }
+    if meta is not None:
+        payload["meta"] = meta
     Path(path).write_text(json.dumps(payload, indent=2))
 
 
@@ -210,6 +252,13 @@ def install_test_time_registers(
     """
     if bb.num_tt_reg < 1:
         raise RuntimeError("Backbone has no test-time registers; call set_tt_registers(n>=1) first")
+    for layer, neurons in rn.layer_to_neurons.items():
+        if not (0 <= layer < bb.depth):
+            raise ValueError(f"layer {layer} is out of range [0, {bb.depth})")
+        hidden = bb.model.blocks[layer].mlp.fc1.out_features
+        for n in neurons:
+            if not (0 <= n < hidden):
+                raise ValueError(f"neuron {n} in layer {layer} is out of range [0, {hidden})")
     handles = []
     for layer, neurons in rn.layer_to_neurons.items():
         if not neurons:
@@ -218,6 +267,11 @@ def install_test_time_registers(
         reg_of = torch.arange(len(idx)) % bb.num_tt_reg
 
         def hook(module, inp, out, idx=idx, reg_of=reg_of):
+            if bb.num_tt_reg < 1:
+                raise RuntimeError(
+                    "test-time registers were removed after install; "
+                    "call remove() on the handles first"
+                )
             out = out.clone()
             ps, rs = bb.patch_slice(), bb.tt_reg_slice()
             idx_d = idx.to(out.device)
@@ -237,6 +291,8 @@ def attention_entropy(
 ) -> dict[str, float]:
     """Mean Shannon entropy (nats) of attention rows, averaged over heads, layers and images,
     reported separately for the cls query, the test-time register queries, and patch queries.
+    Trained register rows, when the backbone has them, are deliberately excluded from all
+    three groups: they are neither cls, test-time register, nor patch queries.
     Leaves fused attention disabled on the backbone.
     """
     bb.set_fused_attention(False)

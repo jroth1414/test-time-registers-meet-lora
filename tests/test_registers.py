@@ -1,3 +1,4 @@
+import json
 import math
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from ttr.backbone import tiny_backbone
 from ttr.registers import (
     OutlierStats,
     RegisterNeurons,
+    _resolve_layer,
     attention_entropy,
     calibrate_outlier_threshold,
     find_register_neurons,
@@ -203,3 +205,119 @@ def test_attention_entropy_keys_and_range():
     for key in ("cls", "tt_reg", "patch"):
         assert 0.0 <= ent[key] <= math.log(T) + 1e-6
     assert bb.model.blocks[1].attn.fused_attn is False  # left disabled on purpose
+
+
+def test_streaming_scores_match_pure_function():
+    bb = tiny_backbone(depth=2, embed_dim=16, mlp_ratio=2.0)
+    loader = _loader(n_batches=3, b=2, img=56, seed=7)
+    st = calibrate_outlier_threshold(bb, loader, layer=-1, k=0.0, max_images=6)
+
+    acts_by_layer = {layer: [] for layer in range(bb.depth)}
+    masks = []
+    for batch in loader:
+        cap_act = bb.capture("mlp_act")
+        cap_res = bb.capture("resid", layers=[st.layer])
+        try:
+            bb.forward_tokens(batch)
+            for layer in range(bb.depth):
+                acts_by_layer[layer].append(cap_act.data[layer][:, bb.patch_slice()].float())
+            norms = cap_res.data[st.layer][:, bb.patch_slice()].norm(dim=-1)
+            masks.append(norms > st.tau)
+        finally:
+            cap_act.remove()
+            cap_res.remove()
+    acts = {layer: torch.cat(v) for layer, v in acts_by_layer.items()}
+    outlier = torch.cat(masks)
+    pure_scores = score_register_neurons(acts, outlier)
+
+    rn = find_register_neurons(bb, loader, st, quantile=0.0, max_neurons=1000, max_images=6)
+    assert set(rn.scores.keys()) == set(pure_scores.keys())
+    for layer in range(bb.depth):
+        got = torch.tensor(rn.scores[layer])
+        assert torch.allclose(got, pure_scores[layer], atol=1e-5)
+
+
+def test_find_register_neurons_returns_empty_when_all_outliers():
+    bb = tiny_backbone(depth=2)
+    loader = _loader(n_batches=2, b=2, seed=6)
+    # tau below every patch norm: every token is an outlier, so there is no "normal" side.
+    st = OutlierStats(layer=1, tau=-1.0, median=0.0, mad=0.0, k=4.0)
+    rn = find_register_neurons(bb, loader, st, quantile=0.0, max_neurons=64, max_images=4)
+    assert rn.layer_to_neurons == {}
+
+
+def test_install_raises_when_registers_removed_after_install():
+    import pytest
+
+    bb = tiny_backbone(depth=2, embed_dim=32, mlp_ratio=2.0)
+    bb.set_tt_registers(1)
+    rn = RegisterNeurons({0: [1]}, OutlierStats(1, 1e9, 0.0, 0.0, 4.0))
+    handles = install_test_time_registers(bb, rn)
+    bb.set_tt_registers(0)
+    x = torch.randn(1, 3, 56, 56)
+    with pytest.raises(RuntimeError):
+        bb.forward_tokens(x)
+    for h in handles:
+        h.remove()
+
+
+def test_install_raises_on_out_of_range_neuron_index():
+    import pytest
+
+    bb = tiny_backbone(depth=2, embed_dim=32, mlp_ratio=2.0)  # hidden = 64
+    bb.set_tt_registers(1)
+    rn = RegisterNeurons({0: [5000]}, OutlierStats(1, 1e9, 0.0, 0.0, 4.0))
+    with pytest.raises(ValueError):
+        install_test_time_registers(bb, rn)
+
+
+def test_install_raises_on_out_of_range_layer_index():
+    import pytest
+
+    bb = tiny_backbone(depth=2, embed_dim=32, mlp_ratio=2.0)
+    bb.set_tt_registers(1)
+    rn = RegisterNeurons({99: [0]}, OutlierStats(1, 1e9, 0.0, 0.0, 4.0))
+    with pytest.raises(ValueError):
+        install_test_time_registers(bb, rn)
+
+
+def test_save_register_neurons_meta_roundtrips_and_is_ignored_on_load(tmp_path: Path):
+    rn = RegisterNeurons({0: [1, 2]}, OutlierStats(0, 1.0, 0.0, 0.0, 4.0))
+    meta = {"model": "tiny", "git_sha": "abc123", "n_calib_images": 6}
+    p = tmp_path / "rn.json"
+    save_register_neurons(rn, p, meta=meta)
+    payload = json.loads(p.read_text())
+    assert payload["meta"] == meta
+
+    back = load_register_neurons(p)
+    assert back.layer_to_neurons == rn.layer_to_neurons
+    assert back.stats == rn.stats
+    assert not hasattr(back, "meta")
+
+
+def test_save_register_neurons_without_meta_has_no_meta_key(tmp_path: Path):
+    rn = RegisterNeurons({0: [1]}, OutlierStats(0, 1.0, 0.0, 0.0, 4.0))
+    p = tmp_path / "rn.json"
+    save_register_neurons(rn, p)
+    payload = json.loads(p.read_text())
+    assert "meta" not in payload
+
+
+def test_resolve_layer_raises_out_of_range():
+    import pytest
+
+    bb = tiny_backbone(depth=2)
+    with pytest.raises(ValueError):
+        _resolve_layer(bb, 2)
+    with pytest.raises(ValueError):
+        _resolve_layer(bb, -3)
+    assert _resolve_layer(bb, -1) == 1
+    assert _resolve_layer(bb, 0) == 0
+
+
+def test_calibrate_raises_on_empty_loader():
+    import pytest
+
+    bb = tiny_backbone(depth=2)
+    with pytest.raises(ValueError):
+        calibrate_outlier_threshold(bb, [], layer=-1)
