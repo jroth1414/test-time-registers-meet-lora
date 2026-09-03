@@ -3,7 +3,15 @@ from torch import nn
 
 from ttr.backbone import tiny_backbone
 from ttr.config import LoraCfg
-from ttr.lora import LoRALinear, apply_lora, count_params, qkv_out_index, set_trainable
+from ttr.lora import (
+    LoRALinear,
+    apply_lora,
+    count_params,
+    load_lora_state_dict,
+    lora_state_dict,
+    qkv_out_index,
+    set_trainable,
+)
 
 
 def test_lora_linear_is_identity_at_init():
@@ -117,3 +125,22 @@ def test_lora_mode_without_adapters_is_an_error():
     bb = tiny_backbone()
     with pytest.raises(RuntimeError):
         set_trainable(bb, "lora")
+
+
+def test_lora_state_dict_roundtrip_changes_outputs():
+    bb1 = tiny_backbone(depth=2)
+    bb2 = tiny_backbone(depth=2)
+    bb2.load_state_dict(bb1.state_dict())   # same base weights, copied BEFORE LoRA renames keys
+    apply_lora(bb1, LoraCfg(enabled=True, r=2))
+    with torch.no_grad():
+        for n, p in bb1.named_parameters():
+            if "lora_B" in n:
+                p.fill_(0.3)
+    sd = lora_state_dict(bb1)
+    assert all("lora_" in k for k in sd) and len(sd) == 4
+
+    apply_lora(bb2, LoraCfg(enabled=True, r=2))
+    x = torch.randn(1, 3, 56, 56)
+    assert not torch.allclose(bb1.forward_features(x), bb2.forward_features(x))
+    load_lora_state_dict(bb2, sd)
+    assert torch.allclose(bb1.forward_features(x), bb2.forward_features(x))

@@ -112,3 +112,14 @@ def set_trainable(bb: Backbone, mode: str) -> None:
             raise RuntimeError("mode='lora' but apply_lora was not called")
     else:
         raise ValueError(f"unknown train mode {mode!r}")
+
+
+def lora_state_dict(bb: Backbone) -> dict[str, Tensor]:
+    return {k: v.detach().cpu().clone() for k, v in bb.state_dict().items() if "lora_" in k}
+
+
+def load_lora_state_dict(bb: Backbone, state: dict[str, Tensor]) -> None:
+    missing = [k for k in state if k not in bb.state_dict()]
+    if missing:
+        raise KeyError(f"LoRA keys not present in model (call apply_lora first): {missing[:3]}")
+    bb.load_state_dict(state, strict=False)
