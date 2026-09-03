@@ -15,7 +15,7 @@ venv/
 *.egg-info/
 
 # Experiment data and checkpoints (never commit)
-data/
+/data/
 checkpoints/
 *.pth
 *.pt
