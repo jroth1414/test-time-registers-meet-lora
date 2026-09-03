@@ -42,6 +42,13 @@ def test_background_fraction():
     assert math.isnan(background_fraction(torch.full((2, 2), 255), [0]))
 
 
+def test_background_fraction_empty_ids():
+    """background_fraction with empty bg_ids returns 0.0 when valid pixels present."""
+    target = torch.tensor([[0, 1], [2, 255]])
+    result = background_fraction(target, [])
+    assert result == 0.0
+
+
 def test_measure_throughput_positive():
     from ttr.metrics import measure_throughput
 
@@ -114,13 +121,23 @@ def test_confusion_meter_per_class_iou_edge_cases():
     """per_class_iou edge cases: absent from both is NaN, predicted but not in GT is 0.0."""
     m = ConfusionMeter(num_classes=3)
     target = torch.tensor([[[0, 0, 1, 1]]])
-    pred = torch.tensor([[[0, 0, 1, 1]]])
+    pred = torch.tensor([[[0, 2, 1, 1]]])
     m.update(pred, target)
 
     ious = m.per_class_iou()
-    # Class 0: tp=2, union=2 -> 1.0
+    # Class 0: tp=1, fn=1 (pred 2 instead) -> 1/2 = 0.5
     # Class 1: tp=2, union=2 -> 1.0
-    # Class 2: tp=0, union=0 -> NaN (absent from both)
-    assert math.isclose(ious[0], 1.0)
+    # Class 2: tp=0, union=1 (predicted once at pos 1, never in GT) -> 0.0
+    assert math.isclose(ious[0], 0.5)
     assert math.isclose(ious[1], 1.0)
-    assert math.isnan(ious[2])
+    assert math.isclose(ious[2], 0.0)
+
+    # Also test absent from both
+    m2 = ConfusionMeter(num_classes=4)
+    target2 = torch.tensor([[[0, 0, 1, 1]]])
+    pred2 = torch.tensor([[[0, 0, 1, 1]]])
+    m2.update(pred2, target2)
+    ious2 = m2.per_class_iou()
+    # Classes 2 and 3 absent from both
+    assert math.isnan(ious2[2])
+    assert math.isnan(ious2[3])
