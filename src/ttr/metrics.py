@@ -12,6 +12,13 @@ from ttr.utils import Timer
 
 
 class ConfusionMeter:
+    """Accumulates confusion matrix for segmentation metrics.
+
+    Tracks true positives, false positives, and false negatives per class.
+    Ignores pixels with target == ignore_index. NaN convention: metrics are NaN
+    when a class has no valid samples (union == 0 for IoU, empty matrix for accuracy).
+    """
+
     def __init__(self, num_classes: int, ignore_index: int = 255) -> None:
         self.k = num_classes
         self.ignore = ignore_index
@@ -25,6 +32,11 @@ class ConfusionMeter:
         keep = target != self.ignore
         t = target[keep].long().cpu()
         p = pred[keep].long().cpu()
+        if t.numel() and (int(t.max()) >= self.k or int(p.max()) >= self.k):
+            raise ValueError(
+                f"label out of range for num_classes={self.k}: "
+                f"max target {int(t.max())}, max prediction {int(p.max())}"
+            )
         idx = t * self.k + p
         self.mat += torch.bincount(idx, minlength=self.k * self.k).reshape(self.k, self.k)
 
@@ -54,9 +66,9 @@ def background_fraction(target: Tensor, bg_ids: list[int], ignore_index: int = 2
     n = int(valid.sum())
     if n == 0:
         return math.nan
-    bg = torch.zeros_like(target, dtype=torch.bool)
-    for c in bg_ids:
-        bg |= target == c
+    if not bg_ids:
+        return 0.0
+    bg = torch.isin(target, torch.tensor(bg_ids, device=target.device, dtype=target.dtype))
     return int((bg & valid).sum()) / n
 
 
