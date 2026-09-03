@@ -15,7 +15,9 @@ def test_mask_head_trains_on_toy():
     torch.manual_seed(0)
     head = MaskHead(8, 3, hidden=16, num_layers=1, heads=2)
     feat = torch.randn(4, 8, 2, 2)
-    target = torch.randint(0, 3, (4, 8, 8))
+    target = (
+        torch.tensor([0, 1, 2, 1]).view(4, 1, 1).expand(4, 8, 8).contiguous()
+    )
     opt = torch.optim.Adam(head.parameters(), lr=1e-2)
     losses = []
     for _ in range(30):
