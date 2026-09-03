@@ -1,9 +1,11 @@
 from pathlib import Path
 
+import pandas as pd
 import torch
 
 from ttr.config import load_config
-from ttr.run import build_model
+from ttr.data import build_dataset
+from ttr.run import build_model, evaluate, train_one_epoch
 
 
 def _cfg(*overrides):
@@ -59,3 +61,38 @@ def test_build_model_lora_mode_requires_lora_enabled(tmp_results: Path):
             _calib_loader(),
             tmp_results,
         )
+
+
+def test_train_skips_all_ignore_batches(tmp_results: Path):
+    cfg = _cfg()
+    dev = torch.device("cpu")
+    bb, head, _ = build_model(cfg, dev, _calib_loader(), tmp_results)
+    x = torch.randn(2, 3, 56, 56)
+    y = torch.full((2, 56, 56), 255, dtype=torch.long)  # every pixel ignored
+    loader = [(x, y)]
+    opt = torch.optim.AdamW(head.parameters(), lr=1e-2)
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: 1.0)
+    before = [p.detach().clone() for p in head.parameters()]
+    loss = train_one_epoch(bb, head, loader, opt, sched, dev, amp=False, mode="frozen")
+    assert loss == 0.0  # nothing counted
+    assert all(torch.equal(a, b) for a, b in zip(before, head.parameters(), strict=True))
+
+
+def test_train_reduces_loss_and_eval_writes_per_image(tmp_results: Path):
+    cfg = _cfg()
+    dev = torch.device("cpu")
+    bb, head, _ = build_model(cfg, dev, _calib_loader(), tmp_results)
+    tr = torch.utils.data.DataLoader(build_dataset(cfg.data, "train"), batch_size=8, shuffle=True)
+    va = torch.utils.data.DataLoader(build_dataset(cfg.data, "val"), batch_size=8)
+    opt = torch.optim.AdamW(head.parameters(), lr=1e-2)
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: 1.0)
+    l0 = train_one_epoch(bb, head, tr, opt, sched, dev, amp=False, mode="frozen")
+    for _ in range(4):
+        l1 = train_one_epoch(bb, head, tr, opt, sched, dev, amp=False, mode="frozen")
+    assert l1 < l0
+    out = evaluate(
+        bb, head, va, 4, [0], dev, amp=False, per_image_path=tmp_results / "per_image.csv"
+    )
+    assert set(out) >= {"miou", "pixel_acc", "per_class_iou"}
+    df = pd.read_csv(tmp_results / "per_image.csv")
+    assert list(df.columns) == ["index", "miou", "bg_fraction"] and len(df) == 8

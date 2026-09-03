@@ -8,8 +8,8 @@ import sys  # noqa: F401
 from pathlib import Path
 
 import torch
-import torch.nn.functional as F  # noqa: F401
-from torch import nn  # noqa: F401
+import torch.nn.functional as F
+from torch import nn
 from torch.utils.data import DataLoader  # noqa: F401
 
 from ttr.backbone import Backbone, build_backbone, normalization_for  # noqa: F401
@@ -17,11 +17,11 @@ from ttr.config import RunCfg, load_config, save_config  # noqa: F401
 from ttr.data import background_class_ids, build_dataset, num_classes  # noqa: F401
 from ttr.heads import build_head
 from ttr.lora import apply_lora, count_params, lora_state_dict, set_trainable  # noqa: F401
-from ttr.metrics import (  # noqa: F401
+from ttr.metrics import (
     ConfusionMeter,
     background_fraction,
     image_miou,
-    measure_throughput,
+    measure_throughput,  # noqa: F401
 )
 from ttr.registers import (
     attention_entropy,  # noqa: F401
@@ -32,12 +32,12 @@ from ttr.registers import (
     outlier_fraction,  # noqa: F401
     save_register_neurons,
 )
-from ttr.utils import (  # noqa: F401
-    Timer,
+from ttr.utils import (
+    Timer,  # noqa: F401
     append_csv_row,
-    get_device,
-    make_run_dir,
-    seed_everything,
+    get_device,  # noqa: F401
+    make_run_dir,  # noqa: F401
+    seed_everything,  # noqa: F401
     write_json,
 )
 
@@ -93,3 +93,70 @@ def build_model(cfg: RunCfg, device: torch.device, calib_loader, run_dir: Path):
     head = build_head(cfg.head, bb.embed_dim, num_classes(cfg.data.name)).to(device)
     info["head_params"] = count_params(head)[0]
     return bb, head, info
+
+
+def _autocast(device: torch.device, amp: bool):
+    enabled = amp and device.type == "cuda"
+    return torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=enabled)
+
+
+def train_one_epoch(
+    bb: Backbone, head: nn.Module, loader, opt, sched, device, amp: bool, mode: str
+) -> float:
+    head.train()
+    bb.train(mode != "frozen")
+    total, n = 0.0, 0
+    for x, y in loader:
+        x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
+        with _autocast(device, amp):
+            if mode == "frozen":
+                with torch.no_grad():
+                    feat = bb.forward_features(x)
+            else:
+                feat = bb.forward_features(x)
+            logits = head(feat, tuple(y.shape[-2:]))
+            loss = F.cross_entropy(logits.float(), y, ignore_index=255)
+        if not torch.isfinite(loss):
+            # All-ignore batch (255) yields NaN; skip rather than poison AdamW.
+            sched.step()
+            continue
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        opt.step()
+        sched.step()
+        total += loss.item() * x.shape[0]
+        n += x.shape[0]
+    return total / max(n, 1)
+
+
+@torch.no_grad()
+def evaluate(
+    bb, head, loader, num_cls: int, bg_ids: list[int], device, amp: bool, per_image_path=None
+) -> dict:
+    head.eval()
+    bb.eval()
+    meter = ConfusionMeter(num_cls)
+    if per_image_path is not None and Path(per_image_path).exists():
+        Path(per_image_path).unlink()
+    idx = 0
+    for x, y in loader:
+        x, y = x.to(device), y.to(device)
+        with _autocast(device, amp):
+            pred = head(bb.forward_features(x), tuple(y.shape[-2:])).argmax(1)
+        meter.update(pred, y)
+        if per_image_path is not None:
+            for p, t in zip(pred, y, strict=True):
+                append_csv_row(
+                    per_image_path,
+                    {
+                        "index": idx,
+                        "miou": image_miou(p, t, num_cls),
+                        "bg_fraction": background_fraction(t, bg_ids),
+                    },
+                )
+                idx += 1
+    return {
+        "miou": meter.miou(),
+        "pixel_acc": meter.pixel_acc(),
+        "per_class_iou": meter.per_class_iou(),
+    }
