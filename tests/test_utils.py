@@ -44,6 +44,13 @@ def test_json_roundtrip(tmp_path: Path):
     assert json.loads(p.read_text())["miou"] == 0.5
 
 
+def test_write_json_maps_non_finite_floats_to_null(tmp_path: Path):
+    p = tmp_path / "nan.json"
+    write_json({"a": float("nan"), "b": [1.0, float("inf")]}, p)
+    assert read_json(p) == {"a": None, "b": [1.0, None]}
+    assert "NaN" not in p.read_text() and "Infinity" not in p.read_text()
+
+
 def test_append_csv_row_writes_header_once(tmp_path: Path):
     p = tmp_path / "log.csv"
     append_csv_row(p, {"epoch": 0, "loss": 1.5})

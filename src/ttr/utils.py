@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import os
 import random
 import time
@@ -32,9 +33,21 @@ def make_run_dir(out_dir: str | Path, run_id: str) -> Path:
     return p
 
 
+def _sanitize_non_finite(obj: Any) -> Any:
+    """Recursively map NaN/Inf/-Inf floats to None so no bare non-finite value reaches disk."""
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _sanitize_non_finite(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_non_finite(v) for v in obj]
+    return obj
+
+
 def write_json(obj: Any, path: str | Path) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(json.dumps(obj, indent=2, sort_keys=True))
+    sanitized = _sanitize_non_finite(obj)
+    Path(path).write_text(json.dumps(sanitized, indent=2, sort_keys=True, allow_nan=False))
 
 
 def read_json(path: str | Path) -> Any:

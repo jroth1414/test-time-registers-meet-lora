@@ -36,7 +36,7 @@ def cell_config(
     name = BACKBONES[fam]["trained" if reg == "trained" else "none"]
     reg_path = None
     if reg == "test_time":
-        reg_path = f"artifacts/register_neurons/{name.replace('.', '_')}.json"
+        reg_path = f"artifacts/res224/register_neurons/{name.replace('.', '_')}.json"
     return {
         "run_id": f"{dataset}__{fam}__{mode}__{reg}__s{seed}",
         "backbone": {

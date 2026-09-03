@@ -69,8 +69,13 @@ def build_model(cfg: RunCfg, device: torch.device, calib_loader, run_dir: Path):
     if cfg.backbone.registers == "test_time":
         if cfg.backbone.register_neuron_path:
             rn = load_register_neurons(cfg.backbone.register_neuron_path)
-        else:
+        elif cfg.backbone.name == "tiny":
             rn = find_register_neurons(bb, calib_loader, stats, max_images=cfg.data.calib_images)
+        else:
+            raise ValueError(
+                "test_time registers on a real checkpoint require register_neuron_path "
+                "(see artifacts/register_neurons/README.md)"
+            )
         save_register_neurons(rn, run_dir / "register_neurons.json")
         install_test_time_registers(bb, rn)
         info["num_register_neurons"] = sum(len(v) for v in rn.layer_to_neurons.values())
@@ -103,10 +108,11 @@ def _autocast(device: torch.device, amp: bool):
 
 def train_one_epoch(
     bb: Backbone, head: nn.Module, loader, opt, sched, device, amp: bool, mode: str
-) -> float:
+) -> tuple[float, int]:
     head.train()
     bb.train(mode != "frozen")
-    total, n = 0.0, 0
+    total, n, n_skipped = 0.0, 0, 0
+    clip_params = [p for g in opt.param_groups for p in g["params"]]
     for x, y in loader:
         x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
         with _autocast(device, amp):
@@ -120,14 +126,16 @@ def train_one_epoch(
         if not torch.isfinite(loss):
             # All-ignore batch (255) yields NaN; skip rather than poison AdamW.
             sched.step()
+            n_skipped += 1
             continue
         opt.zero_grad(set_to_none=True)
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(clip_params, 1.0)
         opt.step()
         sched.step()
         total += loss.item() * x.shape[0]
         n += x.shape[0]
-    return total / max(n, 1)
+    return total / max(n, 1), n_skipped
 
 
 @torch.no_grad()
@@ -166,17 +174,40 @@ def evaluate(
 def _loaders(cfg: RunCfg):
     tr = build_dataset(cfg.data, "train")
     va = build_dataset(cfg.data, "val")
-    kw = dict(num_workers=cfg.data.num_workers, pin_memory=torch.cuda.is_available())
+    kw = dict(
+        num_workers=cfg.data.num_workers,
+        pin_memory=torch.cuda.is_available(),
+        persistent_workers=cfg.data.num_workers > 0,
+    )
     return (
         DataLoader(tr, cfg.data.batch_size, shuffle=True, drop_last=True, **kw),
         DataLoader(va, cfg.data.batch_size, shuffle=False, **kw),
     )
 
 
+def _is_complete(run_dir: Path, cfg: RunCfg) -> bool:
+    """A run is done only if metrics.json parses and has final_miou, and diagnostics.json
+    exists whenever the config asked for diagnostics -- otherwise a run that died partway
+    through (e.g. in the diagnostics block) must not look finished on the next invocation."""
+    p = run_dir / "metrics.json"
+    if not p.exists():
+        return False
+    try:
+        metrics = read_json(p)
+    except (OSError, ValueError):
+        return False
+    if "final_miou" not in metrics:
+        return False
+    if cfg.diagnostics and not (run_dir / "diagnostics.json").exists():
+        return False
+    return True
+
+
 def run(cfg: RunCfg, force: bool = False) -> dict:
     run_dir = make_run_dir(cfg.out_dir, cfg.run_id)
-    if (run_dir / "metrics.json").exists() and not force:
+    if _is_complete(run_dir, cfg) and not force:
         return {**read_json_safe(run_dir / "metrics.json"), "skipped": True}
+    (run_dir / "log.csv").unlink(missing_ok=True)
     seed_everything(cfg.train.seed)
     device = get_device()
     if cfg.backbone.name != "tiny" and cfg.backbone.img_size != cfg.data.img_size:
@@ -202,18 +233,28 @@ def run(cfg: RunCfg, force: bool = False) -> dict:
         groups.append({"params": bb_params, "lr": lr_bb})
     opt = torch.optim.AdamW(groups, weight_decay=cfg.train.weight_decay)
     steps = max(cfg.train.epochs * len(train_loader), 1)
-    sched = torch.optim.lr_scheduler.LambdaLR(
-        opt, lambda s: 0.5 * (1 + math.cos(math.pi * min(s, steps) / steps))
-    )
+    warm = max(int(0.05 * steps), 1)
 
-    best, best_state = -1.0, None
+    def _lr_lambda(s: int) -> float:
+        if s < warm:
+            return s / warm
+        return 0.5 * (1 + math.cos(math.pi * min(s, steps) / steps))
+
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, _lr_lambda)
+
+    # No model selection on the validation set: the final checkpoint and metrics come from
+    # the last epoch's weights. best_miou is still logged, but only as a reference statistic
+    # (the max over the per-epoch validation curve), never used to pick a checkpoint.
+    best = -1.0
     with Timer() as wall:
         for epoch in range(cfg.train.epochs):
+            lr_start = opt.param_groups[0]["lr"]
             with Timer() as t:
-                loss = train_one_epoch(
+                loss, n_skipped = train_one_epoch(
                     bb, head, train_loader, opt, sched, device, cfg.train.amp, cfg.train.mode
                 )
             ev = evaluate(bb, head, val_loader, k, bg, device, cfg.train.amp)
+            best = max(best, ev["miou"])
             append_csv_row(
                 run_dir / "log.csv",
                 {
@@ -221,34 +262,25 @@ def run(cfg: RunCfg, force: bool = False) -> dict:
                     "train_loss": loss,
                     "val_miou": ev["miou"],
                     "val_pixel_acc": ev["pixel_acc"],
-                    "lr": opt.param_groups[0]["lr"],
+                    "lr": lr_start,
                     "epoch_seconds": t.seconds,
+                    "n_skipped": n_skipped,
                 },
             )
-            if ev["miou"] > best:
-                best = ev["miou"]
-                best_state = {
-                    "head": {k_: v.cpu() for k_, v in head.state_dict().items()},
-                    "lora": lora_state_dict(bb),
-                    # full fine-tune has no adapter to save; keep the whole backbone
-                    # (gitignored .pt)
-                    "backbone": (
-                        {k_: v.cpu() for k_, v in bb.state_dict().items()}
-                        if cfg.train.mode == "full"
-                        else None
-                    ),
-                }
             print(
                 f"[{cfg.run_id}] epoch {epoch} loss {loss:.4f} val mIoU {ev['miou']:.4f}",
                 flush=True,
             )
 
-    torch.save(best_state, run_dir / "head_lora.pt")
-    head.load_state_dict(best_state["head"])
-    if best_state["backbone"] is not None:
-        bb.load_state_dict(best_state["backbone"])
-    elif best_state["lora"]:
-        bb.load_state_dict(best_state["lora"], strict=False)
+    last_state = {
+        "head": {k_: v.cpu() for k_, v in head.state_dict().items()},
+        "lora": lora_state_dict(bb),
+        # full fine-tune has no adapter to save; keep the whole backbone (gitignored .pt)
+        "backbone": (
+            {k_: v.cpu() for k_, v in bb.state_dict().items()} if cfg.train.mode == "full" else None
+        ),
+    }
+    torch.save(last_state, run_dir / "head_lora.pt")
     final = evaluate(
         bb, head, val_loader, k, bg, device, cfg.train.amp, per_image_path=run_dir / "per_image.csv"
     )
@@ -265,7 +297,6 @@ def run(cfg: RunCfg, force: bool = False) -> dict:
         "head_params": info["head_params"],
         "wall_seconds": wall.seconds,
     }
-    write_json(metrics, run_dir / "metrics.json")
 
     if cfg.diagnostics:
         bb.eval()
@@ -283,32 +314,41 @@ def run(cfg: RunCfg, force: bool = False) -> dict:
 
         diag["images_per_s"] = measure_throughput(_fwd, x.to(device))
         diag["throughput_dtype"] = "bf16" if (cfg.train.amp and device.type == "cuda") else "fp32"
-        n = cfg.data.calib_images
+        n = cfg.data.diag_images
         # H1 primary: fixed tau from the frozen model, at the model-specific outlier layer.
         diag["outlier_fraction"] = outlier_fraction(bb, val_loader, info["stats"], max_images=n)
         diag["outlier_fraction_last_layer"] = outlier_fraction(
             bb, val_loader, info["stats_last"], max_images=n
         )
         # H1 robustness: recalibrate tau on the trained model; if LoRA only rescaled the residual
-        # stream, this fraction stays put while the fixed-tau one moves.
-        recal = calibrate_outlier_threshold(
-            bb, val_loader, layer=cfg.backbone.outlier_layer, max_images=n
-        )
-        diag["outlier_stats_post"] = recal.__dict__
-        diag["outlier_fraction_recalibrated"] = outlier_fraction(
-            bb, val_loader, recal, max_images=n
-        )
+        # stream, this fraction stays put while the fixed-tau one moves. Frozen backbones never
+        # move, so recalibrating would just reproduce the pre-training numbers; skip the extra
+        # pass and record that explicitly instead of a redundant identical measurement.
+        if cfg.train.mode == "frozen":
+            diag["outlier_stats_post"] = info["outlier_stats"]
+            diag["outlier_fraction_recalibrated"] = diag["outlier_fraction"]
+            diag["recalibrated"] = False
+        else:
+            recal = calibrate_outlier_threshold(
+                bb, val_loader, layer=cfg.backbone.outlier_layer, max_images=n
+            )
+            diag["outlier_stats_post"] = recal.__dict__
+            diag["outlier_fraction_recalibrated"] = outlier_fraction(
+                bb, val_loader, recal, max_images=n
+            )
+            diag["recalibrated"] = True
         diag["attn_entropy"] = attention_entropy(
             bb, val_loader, layers=[bb.depth - 1], max_images=16
         )
         write_json(diag, run_dir / "diagnostics.json")
+    write_json(metrics, run_dir / "metrics.json")
     return metrics
 
 
 def read_json_safe(p: Path) -> dict:
     try:
         return read_json(p)
-    except Exception:
+    except (OSError, ValueError):
         return {}
 
 

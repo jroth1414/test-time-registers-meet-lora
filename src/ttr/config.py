@@ -50,6 +50,7 @@ class DataCfg:
     batch_size: int = 16
     num_workers: int = 4
     calib_images: int = 64
+    diag_images: int = 512  # sample size for the H1 diagnostics pass (run.py); not calibration
     mean: list[float] = field(default_factory=lambda: [0.485, 0.456, 0.406])
     std: list[float] = field(default_factory=lambda: [0.229, 0.224, 0.225])
 
