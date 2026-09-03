@@ -1,0 +1,48 @@
+run_id: ade20k__vits__frozen__none__s0
+out_dir: results
+backbone:
+  name: vit_small_patch14_dinov2.lvd142m
+  img_size: 224
+  pretrained: true
+  registers: none
+  num_test_time_registers: 1
+  register_neuron_path: null
+  outlier_layer: 10
+  capture_attention: false
+lora:
+  enabled: false
+  r: 8
+  alpha: 16.0
+  targets:
+  - q
+  - v
+  layers: all
+  dropout: 0.0
+head:
+  type: linear
+  hidden: 256
+data:
+  name: ade20k
+  root: data/ade20k
+  img_size: 224
+  batch_size: 16
+  num_workers: 4
+  calib_images: 64
+  mean:
+  - 0.485
+  - 0.456
+  - 0.406
+  std:
+  - 0.229
+  - 0.224
+  - 0.225
+train:
+  mode: frozen
+  epochs: 5
+  lr: 0.001
+  lr_backbone: 1.0e-05
+  weight_decay: 0.01
+  amp: true
+  grad_checkpoint: false
+  seed: 0
+diagnostics: true

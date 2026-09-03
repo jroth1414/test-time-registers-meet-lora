@@ -1,0 +1,27 @@
+{
+  "attn_entropy": {
+    "cls": 4.650071144104004,
+    "patch": 4.275038719177246,
+    "tt_reg": 4.620121955871582
+  },
+  "images_per_s": 991.4757874546206,
+  "num_register_neurons": 19,
+  "outlier_fraction": 0.0009765625,
+  "outlier_fraction_last_layer": 0.0,
+  "outlier_fraction_recalibrated": 0.00140380859375,
+  "outlier_stats": {
+    "k": 4.0,
+    "layer": 10,
+    "mad": 0.5162034034729004,
+    "median": 6.840890884399414,
+    "tau": 9.902183548355103
+  },
+  "outlier_stats_post": {
+    "k": 4.0,
+    "layer": 10,
+    "mad": 0.503882884979248,
+    "median": 6.796881198883057,
+    "tau": 9.78510825996399
+  },
+  "throughput_dtype": "bf16"
+}
