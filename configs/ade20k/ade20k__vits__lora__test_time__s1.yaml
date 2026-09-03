@@ -4,7 +4,7 @@ backbone:
   img_size: 224
   registers: test_time
   num_test_time_registers: 1
-  outlier_layer: 10
+  outlier_layer: 9
   register_neuron_path: artifacts/res224/register_neurons/vit_small_patch14_dinov2_lvd142m.json
 lora:
   enabled: true

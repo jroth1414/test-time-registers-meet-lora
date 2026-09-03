@@ -19,8 +19,8 @@ BACKBONES = {
     },
     "clipb": {"none": "vit_base_patch16_clip_224.openai", "trained": None},
 }
-# Residual layer where each family's outlier tokens live (artifacts/register_neurons/README.md).
-OUTLIER_LAYER = {"vits": 10, "vitb": 8, "clipb": 11}
+# Residual layer where each family's outlier tokens live (register_neurons/README.md 224 px).
+OUTLIER_LAYER = {"vits": 9, "vitb": 8, "clipb": 11}
 MODES = ["frozen", "lora", "full"]
 REGISTERS = ["none", "test_time", "trained"]
 CELLS = [

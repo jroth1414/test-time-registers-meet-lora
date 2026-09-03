@@ -17,7 +17,7 @@ def test_factorial_cells_and_files(tmp_path: Path):
     assert not any("clip" in p.name and "__trained__" in p.name for p in paths)
     vits_path = next(p for p in paths if "__vits__frozen__none__s0" in p.name)
     vits = yaml.safe_load(vits_path.read_text())
-    assert vits["backbone"]["outlier_layer"] == 10
+    assert vits["backbone"]["outlier_layer"] == 9
 
     tt_paths = [p for p in paths if "__test_time__" in p.name]
     assert tt_paths
