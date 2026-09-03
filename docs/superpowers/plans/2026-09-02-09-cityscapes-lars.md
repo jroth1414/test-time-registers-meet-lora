@@ -435,6 +435,81 @@ git add src/ttr tests configs/cityscapes configs/lars
 git commit -m "feat: LaRS proxy metrics and evaluator hook; Cityscapes and LaRS factorials"
 ```
 
+---
+
+### Task 4: Scale-free norm diagnostic
+
+The tau-relative outlier fraction is calibrated per model, so it cannot be compared across backbones (chunk 7 sanity runs: the trained-register DINOv2-S sits at a median patch norm of 17.9 versus 6.8 for the plain model and still shows a 0.26% 4-MAD tail). Log a scale-free companion.
+
+**Files:**
+- Modify: `src/ttr/registers.py` (add `patch_norm_quantiles`)
+- Modify: `src/ttr/run.py` (diagnostics gain `norm_quantiles`, `norm_ratio_p999`, `norm_ratio_max`)
+- Test: `tests/test_registers.py`, `tests/test_run.py`
+
+- [ ] **Step 1: Failing tests**
+
+```python
+# tests/test_registers.py
+from ttr.registers import patch_norm_quantiles
+
+
+def test_patch_norm_quantiles_monotone_and_ratio():
+    bb = tiny_backbone(depth=2)
+    q = patch_norm_quantiles(bb, _loader(n_batches=2), layer=-1, max_images=4)
+    assert list(q) == ["q50", "q99", "q999", "max"]
+    assert q["q50"] <= q["q99"] <= q["q999"] <= q["max"]
+    assert q["max"] > 0
+```
+
+```python
+# tests/test_run.py (extend test_run_end_to_end_writes_all_artifacts)
+    assert {"norm_quantiles", "norm_ratio_p999", "norm_ratio_max"} <= set(diag)
+    assert diag["norm_ratio_max"] >= diag["norm_ratio_p999"] >= 1.0
+```
+
+- [ ] **Step 2: Implement**
+
+```python
+@torch.no_grad()
+def patch_norm_quantiles(bb: Backbone, loader: Iterable, layer: int = -1, max_images: int = 64) -> dict[str, float]:
+    """Quantiles of patch-token norms at `layer` over up to max_images images (scale-free when
+    divided by q50; comparable across backbones, unlike the tau-relative outlier fraction)."""
+    layer = _resolve_layer(bb, layer)
+    dev = next(bb.parameters()).device
+    norms, seen = [], 0
+    for batch in loader:
+        x = _images(batch).to(dev)
+        norms.append(patch_norms(bb, x, layer).flatten().float().cpu())
+        seen += x.shape[0]
+        if seen >= max_images:
+            break
+    n = torch.cat(norms)
+    qs = torch.quantile(n, torch.tensor([0.5, 0.99, 0.999]))
+    return {"q50": qs[0].item(), "q99": qs[1].item(), "q999": qs[2].item(), "max": n.max().item()}
+```
+
+In `run()`'s diagnostics block, after `outlier_fraction_recalibrated` and before `attn_entropy`:
+
+```python
+        nq = patch_norm_quantiles(bb, val_loader, layer=cfg.backbone.outlier_layer, max_images=n)
+        diag["norm_quantiles"] = nq
+        diag["norm_ratio_p999"] = nq["q999"] / max(nq["q50"], 1e-9)
+        diag["norm_ratio_max"] = nq["max"] / max(nq["q50"], 1e-9)
+```
+
+- [ ] **Step 3: Run, commit**
+
+Run: `pytest tests/test_registers.py tests/test_run.py -q`, then the full suite.
+
+```powershell
+git add src/ttr/registers.py src/ttr/run.py tests/test_registers.py tests/test_run.py
+git commit -m "feat: scale-free patch-norm quantile diagnostic"
+```
+
+Chunk 10's `collect` should also forward `norm_ratio_p999` and `norm_ratio_max`.
+
+---
+
 Before generating those configs, make the resolution explicit in `scripts/make_factorial.py`: Cityscapes frames are 2048x1024 and LaRS frames are wide too, so a 224 px centre crop discards most of the scene. In `cell_config`, replace the fixed 224 with
 
 ```python
