@@ -210,5 +210,17 @@
     "median": 14.319084167480469,
     "mad": 1.1225767135620117,
     "k": 4.0
+  },
+  "meta": {
+    "model": "vit_base_patch16_clip_224.openai",
+    "img_size": 224,
+    "layer": 11,
+    "k": 4.0,
+    "quantile": 0.995,
+    "max_neurons": 200,
+    "num_registers": 1,
+    "n_calib_images": 64,
+    "images_dir": "data/calib",
+    "git_sha": "a4404d2"
   }
 }

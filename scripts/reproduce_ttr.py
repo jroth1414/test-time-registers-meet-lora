@@ -6,6 +6,7 @@ object-centred instead of speckled.
 """
 
 import argparse
+import subprocess
 from pathlib import Path
 
 import matplotlib
@@ -43,6 +44,15 @@ class Folder(Dataset):
 
     def __getitem__(self, i):
         return self.tf(Image.open(self.paths[i]).convert("RGB"))
+
+
+def _git_sha() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL, text=True
+        ).strip()
+    except Exception:
+        return "unknown"
 
 
 def main():
@@ -86,37 +96,68 @@ def main():
     print(f"outlier fraction after: {after:.4f}  (ratio {after / max(before, 1e-9):.3f})")
     print("cls attention entropy before/after:", ent_before["cls"], ent_after["cls"])
 
+    meta = {
+        "model": args.model,
+        "img_size": args.img_size,
+        "layer": stats.layer,
+        "k": args.k,
+        "quantile": args.quantile,
+        "max_neurons": args.max_neurons,
+        "num_registers": args.num_registers,
+        "n_calib_images": args.calib,
+        "images_dir": args.images,
+        "git_sha": _git_sha(),
+    }
     tag = args.model.replace(".", "_")
-    save_register_neurons(rn, Path(args.out) / "register_neurons" / f"{tag}.json")
+    save_register_neurons(rn, Path(args.out) / "register_neurons" / f"{tag}.json", meta=meta)
 
-    # Attention figure: cls -> patch attention at the last layer, first 4 images, before/after.
+    # Attention figure: cls -> patch attention, first 4 images, before/after, at two layers:
+    # the last block and the deepest layer that got an intervention (if any).
     x = torch.stack([ds[i] for i in range(4)]).to(dev)
+    last_layer = bb.depth - 1
+    intervention_layer = max(rn.layer_to_neurons) if rn.layer_to_neurons else last_layer
+    fig_layers = sorted({last_layer, intervention_layer})
 
-    def cls_maps(bb):
-        cap = bb.capture("attn", layers=[bb.depth - 1])
+    def cls_maps(layers):
+        cap = bb.capture("attn", layers=layers)
         bb.forward_tokens(x)
-        a = cap.data[bb.depth - 1].mean(1)[:, 0, bb.patch_slice()]  # (4, P)
-        cap.remove()
         h, w = bb.grid((args.img_size, args.img_size))
-        return a.reshape(4, h, w).cpu()
+        out = {
+            layer_idx: cap.data[layer_idx].mean(1)[:, 0, bb.patch_slice()].reshape(4, h, w).cpu()
+            for layer_idx in layers
+        }
+        cap.remove()
+        return out
 
-    maps_after = cls_maps(bb)
+    maps_after = cls_maps(fig_layers)
     for hd in handles:
         hd.remove()
     bb.set_tt_registers(0)
-    maps_before = cls_maps(bb)
-    fig, axes = plt.subplots(2, 4, figsize=(12, 6))
-    for i in range(4):
-        axes[0, i].imshow(maps_before[i])
-        axes[0, i].set_title("before")
-        axes[0, i].axis("off")
-        axes[1, i].imshow(maps_after[i])
-        axes[1, i].set_title("after")
-        axes[1, i].axis("off")
+    maps_before = cls_maps(fig_layers)
+
+    n_rows = 2 * len(fig_layers)
+    fig, axes = plt.subplots(n_rows, 4, figsize=(12, 3 * n_rows))
+    for row, layer_idx in enumerate(fig_layers):
+        b_maps, a_maps = maps_before[layer_idx], maps_after[layer_idx]
+        r_before, r_after = 2 * row, 2 * row + 1
+        for i in range(4):
+            vmin = min(b_maps[i].min().item(), a_maps[i].min().item())
+            vmax = max(b_maps[i].max().item(), a_maps[i].max().item())
+            axes[r_before, i].imshow(b_maps[i], vmin=vmin, vmax=vmax)
+            axes[r_before, i].set_title(f"before L{layer_idx}")
+            axes[r_before, i].axis("off")
+            axes[r_after, i].imshow(a_maps[i], vmin=vmin, vmax=vmax)
+            axes[r_after, i].set_title(f"after L{layer_idx}")
+            axes[r_after, i].axis("off")
     Path(args.out, "figures").mkdir(parents=True, exist_ok=True)
     fig.savefig(Path(args.out) / "figures" / f"attn_{tag}.png", dpi=120, bbox_inches="tight")
     print("wrote", Path(args.out) / "figures" / f"attn_{tag}.png")
-    print("PASS" if after < 0.2 * before else "FAIL: tune --k, --quantile, --max-neurons, --layer")
+    if before < 1e-6:
+        print("N/A (no outliers to remove)")
+    elif after < 0.2 * before:
+        print("PASS")
+    else:
+        print("FAIL: tune --k, --quantile, --max-neurons, --layer")
 
 
 if __name__ == "__main__":

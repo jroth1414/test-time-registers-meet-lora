@@ -15,6 +15,15 @@ validation JPEGs), batch size 8, on one RTX 5070 Ti. Acceptance: outlier fractio
 | vit_base_patch16_clip_224.openai | `--img-size 224 --quantile 0.995 --max-neurons 200` | 0.0390 | 0.0002 | 0.004 | 185 |
 | vit_small_patch14_reg4_dinov2.lvd142m (baseline) | (default) | 0.0000 | 0.0000 | n/a | n/a |
 
+DINOv2-B's 0.199 ratio sits one point inside the `< 0.2` bar on this 64-image calibration set;
+treat it as a pass with little margin, not a comfortable one.
+
+DINOv2's two neuron maps were selected at 518 px (the resolution `find_register_neurons` ran
+at here) but the factorial applies them at 224 px. Neuron identity transfers across resolution
+(a neuron is a fixed row of the MLP weight matrix), but `tau` does not: the factorial's runner
+must recalibrate `tau` at its own input resolution rather than reusing the `tau` stored in these
+JSONs.
+
 ## Notes
 
 - **Default flags (`--layer -1`, `--k 4.0`, `--quantile 0.999`) under-detect on this model
@@ -26,11 +35,13 @@ validation JPEGs), batch size 8, on one RTX 5070 Ti. Acceptance: outlier fractio
   median 8.43 vs max 428.91. Moving `--layer` earlier, as the task brief anticipates, was
   sufficient for both DINOv2 checkpoints.
 - **CLIP ViT-B/16 needed the opposite move: `--layer -1` (the default) but a looser quantile.**
-  Its outlier signature is sharpest at the last layer (layer 11: median 14.48, p99 80.33), but
-  the default `--quantile 0.999, --max-neurons 64` only captured 37 of the relevant neurons,
-  leaving `after/before = 0.249` (just above the 0.2 bar). Loosening to
-  `--quantile 0.995 --max-neurons 200` picked up 185 neurons across layers 3-11 and drove the
-  ratio to 0.004.
+  Its outlier signature is sharpest at the last layer (layer 11: median 14.32, p99 80.33 from an
+  earlier exploratory norm-histogram pass over a different image count; the run recorded in the
+  table above, and in `vit_base_patch16_clip_224_openai.json`'s `stats.median`, gives 14.319 for
+  the exact 64-image calibration set), but the default `--quantile 0.999, --max-neurons 64` only
+  captured 37 of the relevant neurons, leaving `after/before = 0.249` (just above the 0.2 bar).
+  Loosening to `--quantile 0.995 --max-neurons 200` picked up 185 neurons across layers 3-11 and
+  drove the ratio to 0.004.
 - **`vit_small_patch14_reg4_dinov2.lvd142m` (Step 3 baseline) is a reference, not a PASS/FAIL
   case.** Its trained register tokens already absorb the outlier patches: outlier fraction before
   is 0.0000 at default flags, so `find_register_neurons` returns an empty neuron map and there is
@@ -39,3 +50,9 @@ validation JPEGs), batch size 8, on one RTX 5070 Ti. Acceptance: outlier fractio
 - `src/ttr/registers.py` was not modified; every model above passes (or, for the reg4 baseline,
   behaves as expected) using only the CLI knobs the task brief allows
   (`--k`, `--quantile`, `--max-neurons`, `--layer`).
+- **DINOv2-B's figure keeps a saturated top-left pixel, before and after intervention alike.**
+  `attn_vit_base_patch14_dinov2_lvd142m.png` shows one bright patch at grid position (0, 0) in
+  every panel; it survives the register intervention because it is not one of the redirected
+  outlier neurons at layer 11, just a fixed high-attention artifact at the image border. It is
+  cosmetic, not a failure of the intervention: the outlier-fraction and ratio numbers above are
+  unaffected.

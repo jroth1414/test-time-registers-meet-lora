@@ -40,5 +40,17 @@
     "median": 6.724493980407715,
     "mad": 0.5158133506774902,
     "k": 4.0
+  },
+  "meta": {
+    "model": "vit_small_patch14_dinov2.lvd142m",
+    "img_size": 518,
+    "layer": 10,
+    "k": 4.0,
+    "quantile": 0.999,
+    "max_neurons": 64,
+    "num_registers": 1,
+    "n_calib_images": 64,
+    "images_dir": "data/calib",
+    "git_sha": "a4404d2"
   }
 }
