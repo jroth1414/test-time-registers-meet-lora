@@ -488,6 +488,11 @@ def patch_norm_quantiles(bb: Backbone, loader: Iterable, layer: int = -1, max_im
     return {"q50": qs[0].item(), "q99": qs[1].item(), "q999": qs[2].item(), "max": n.max().item()}
 ```
 
+Also in this task (runner hygiene carried over from the chunk 8 review): AdamW must not apply
+weight decay to 1-D parameters (LayerNorm gains, biases) or to the mask head's query table. In
+`run()`, split each parameter group into `{"params": decay, "weight_decay": cfg.train.weight_decay}`
+and `{"params": no_decay, "weight_decay": 0.0}` where `no_decay = [p for p in params if p.ndim <= 1 or p is getattr(head, "queries", None)]`; add a test that a `mask` head run builds an optimizer with at least one zero-decay group.
+
 In `run()`'s diagnostics block, after `outlier_fraction_recalibrated` and before `attn_entropy`:
 
 ```python
