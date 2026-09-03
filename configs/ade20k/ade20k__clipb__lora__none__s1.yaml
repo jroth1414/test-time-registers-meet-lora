@@ -1,0 +1,33 @@
+run_id: ade20k__clipb__lora__none__s1
+backbone:
+  name: vit_base_patch16_clip_224.openai
+  img_size: 224
+  registers: none
+  num_test_time_registers: 1
+  outlier_layer: 11
+  register_neuron_path: null
+lora:
+  enabled: true
+  r: 8
+  alpha: 16.0
+  targets:
+  - q
+  - v
+head:
+  type: linear
+data:
+  name: ade20k
+  root: data/ade20k
+  img_size: 224
+  batch_size: 16
+  num_workers: 4
+  calib_images: 64
+train:
+  mode: lora
+  epochs: 10
+  lr: 0.001
+  lr_backbone: 1.0e-05
+  amp: true
+  grad_checkpoint: false
+  seed: 1
+diagnostics: true

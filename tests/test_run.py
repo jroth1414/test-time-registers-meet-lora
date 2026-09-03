@@ -140,3 +140,16 @@ def test_cli_accepts_overrides(tmp_results: Path):
         ]
     )
     assert (tmp_results / "cli" / "metrics.json").exists()
+
+
+def test_run_full_mode_saves_backbone(tmp_results: Path):
+    cfg = _cfg(
+        f"out_dir={tmp_results.as_posix()}",
+        "run_id=full",
+        "train.mode=full",
+        "train.epochs=1",
+    )
+    m = run(cfg)
+    assert m["skipped"] is False and m["trainable_params"] > 0
+    ckpt = torch.load(tmp_results / "full" / "head_lora.pt", weights_only=False)
+    assert ckpt["backbone"] is not None and ckpt["lora"] == {}
