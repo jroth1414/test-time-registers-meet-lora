@@ -18,3 +18,10 @@ def test_factorial_cells_and_files(tmp_path: Path):
     vits_path = next(p for p in paths if "__vits__frozen__none__s0" in p.name)
     vits = yaml.safe_load(vits_path.read_text())
     assert vits["backbone"]["outlier_layer"] == 10
+
+    tt_paths = [p for p in paths if "__test_time__" in p.name]
+    assert tt_paths
+    for p in tt_paths:
+        reg_path = yaml.safe_load(p.read_text())["backbone"]["register_neuron_path"]
+        assert reg_path.startswith("artifacts/res224/register_neurons/")
+        assert Path(reg_path).exists(), reg_path

@@ -24,6 +24,37 @@ at here) but the factorial applies them at 224 px. Neuron identity transfers acr
 must recalibrate `tau` at its own input resolution rather than reusing the `tau` stored in these
 JSONs.
 
+## 224 px (factorial resolution)
+
+Same detector flags as the 518 px table above, run at `--img-size 224` (the factorial's actual
+resolution) and written to `artifacts/res224/` instead of `artifacts/`. `scripts/make_factorial.py`
+points every `registers=test_time` cell at these maps, not the 518 px ones. Same acceptance bar
+(`< 0.2 * before`), same 64-image calibration set, same GPU.
+
+| checkpoint | flags | outlier frac before | after | ratio | neurons | result |
+|---|---|---|---|---|---|---|
+| vit_small_patch14_dinov2.lvd142m | `--layer -2` | 0.0049 | 0.0021 | 0.432 | 19 | FAIL |
+| vit_base_patch14_dinov2.lvd142m | `--layer 8` | 0.0192 | 0.0045 | 0.232 | 37 | FAIL |
+| vit_base_patch16_clip_224.openai | `--img-size 224 --quantile 0.995 --max-neurons 200` | 0.0390 | 0.0002 | 0.004 | 185 | PASS |
+
+Both DINOv2 maps neuron-select at the same neuron count as their 518 px counterparts (19 and 37;
+the selection is deterministic given the same flags and calibration images at a fixed image
+count, and `find_register_neurons`'s streaming statistics happen to reproduce the same
+quantile cut at both resolutions here), but the *outlier fractions* they were tuned against move:
+at 224 px there are fewer patch tokens per image, and, on this calibration set, the residual-norm
+gap between outlier and normal patches at layers 10 (ViT-S) and 8 (ViT-B) is less pronounced than
+at 518 px, so the same neurons redirect a smaller share of the class of tokens `tau` calls
+outliers. Both DINOv2 checkpoints fail the `< 0.2` bar at 224 px with the flags recorded for
+518 px; per the task brief, the flags are not retuned to chase a pass at a resolution the
+original detection sweep did not target. The maps are kept and wired into the factorial anyway:
+H1's outlier-fraction diagnostic is measured per run regardless of whether the test-time-register
+intervention clears this bar, and a weaker (or negative) intervention at 224 px is itself a
+finding about resolution sensitivity, not a reason to withhold the arm.
+
+CLIP passes comfortably at 224 px (ratio 0.004, same as 518 px) with the same loosened
+`--quantile`/`--max-neurons` flags; its outlier signature at the last layer is not resolution-
+sensitive in the same way.
+
 ## Notes
 
 - **Default flags (`--layer -1`, `--k 4.0`, `--quantile 0.999`) under-detect on this model
