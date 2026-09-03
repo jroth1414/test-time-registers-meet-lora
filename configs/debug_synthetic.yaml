@@ -1,0 +1,7 @@
+run_id: debug_synthetic
+backbone: {name: tiny, pretrained: false, img_size: 56, registers: test_time, num_test_time_registers: 1}
+lora: {enabled: true, r: 2, targets: [q, v]}
+head: {type: linear}
+data: {name: synthetic, img_size: 56, batch_size: 8, num_workers: 0, calib_images: 8}
+train: {mode: lora, epochs: 2, lr: 1.0e-2, amp: false, seed: 0}
+diagnostics: true

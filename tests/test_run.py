@@ -1,11 +1,13 @@
 from pathlib import Path
 
 import pandas as pd
+import pytest
 import torch
 
 from ttr.config import load_config
 from ttr.data import build_dataset
-from ttr.run import build_model, evaluate, train_one_epoch
+from ttr.run import build_model, evaluate, main, run, train_one_epoch
+from ttr.utils import read_json
 
 
 def _cfg(*overrides):
@@ -63,6 +65,7 @@ def test_build_model_lora_mode_requires_lora_enabled(tmp_results: Path):
         )
 
 
+@pytest.mark.filterwarnings("ignore:Detected call of .lr_scheduler.step.*:UserWarning")
 def test_train_skips_all_ignore_batches(tmp_results: Path):
     cfg = _cfg()
     dev = torch.device("cpu")
@@ -96,3 +99,44 @@ def test_train_reduces_loss_and_eval_writes_per_image(tmp_results: Path):
     assert set(out) >= {"miou", "pixel_acc", "per_class_iou"}
     df = pd.read_csv(tmp_results / "per_image.csv")
     assert list(df.columns) == ["index", "miou", "bg_fraction"] and len(df) == 8
+
+
+def test_run_end_to_end_writes_all_artifacts(tmp_results: Path):
+    cfg = _cfg(f"out_dir={tmp_results.as_posix()}", "run_id=e2e", "train.epochs=2")
+    m = run(cfg)
+    d = tmp_results / "e2e"
+    for f in (
+        "config.yaml",
+        "log.csv",
+        "metrics.json",
+        "diagnostics.json",
+        "per_image.csv",
+        "head_lora.pt",
+    ):
+        assert (d / f).exists(), f
+    assert m["best_miou"] >= 0 and m["epochs"] == 2
+    diag = read_json(d / "diagnostics.json")
+    assert {
+        "outlier_fraction",
+        "outlier_fraction_last_layer",
+        "outlier_fraction_recalibrated",
+        "outlier_stats_post",
+        "attn_entropy",
+        "images_per_s",
+    } <= set(diag)
+    # second call is skipped
+    assert run(cfg)["skipped"] is True
+    assert run(cfg, force=True)["skipped"] is False
+
+
+def test_cli_accepts_overrides(tmp_results: Path):
+    main(
+        [
+            "--config",
+            "configs/debug_synthetic.yaml",
+            f"out_dir={tmp_results.as_posix()}",
+            "run_id=cli",
+            "train.epochs=1",
+        ]
+    )
+    assert (tmp_results / "cli" / "metrics.json").exists()

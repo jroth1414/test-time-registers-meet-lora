@@ -2,42 +2,43 @@
 
 from __future__ import annotations
 
-import argparse  # noqa: F401
-import math  # noqa: F401
-import sys  # noqa: F401
+import argparse
+import math
+import sys
 from pathlib import Path
 
 import torch
 import torch.nn.functional as F
 from torch import nn
-from torch.utils.data import DataLoader  # noqa: F401
+from torch.utils.data import DataLoader
 
-from ttr.backbone import Backbone, build_backbone, normalization_for  # noqa: F401
-from ttr.config import RunCfg, load_config, save_config  # noqa: F401
-from ttr.data import background_class_ids, build_dataset, num_classes  # noqa: F401
+from ttr.backbone import Backbone, build_backbone, normalization_for
+from ttr.config import RunCfg, load_config, save_config
+from ttr.data import background_class_ids, build_dataset, num_classes
 from ttr.heads import build_head
-from ttr.lora import apply_lora, count_params, lora_state_dict, set_trainable  # noqa: F401
+from ttr.lora import apply_lora, count_params, lora_state_dict, set_trainable
 from ttr.metrics import (
     ConfusionMeter,
     background_fraction,
     image_miou,
-    measure_throughput,  # noqa: F401
+    measure_throughput,
 )
 from ttr.registers import (
-    attention_entropy,  # noqa: F401
+    attention_entropy,
     calibrate_outlier_threshold,
     find_register_neurons,
     install_test_time_registers,
     load_register_neurons,
-    outlier_fraction,  # noqa: F401
+    outlier_fraction,
     save_register_neurons,
 )
 from ttr.utils import (
-    Timer,  # noqa: F401
+    Timer,
     append_csv_row,
-    get_device,  # noqa: F401
-    make_run_dir,  # noqa: F401
-    seed_everything,  # noqa: F401
+    get_device,
+    make_run_dir,
+    read_json,
+    seed_everything,
     write_json,
 )
 
@@ -160,3 +161,167 @@ def evaluate(
         "pixel_acc": meter.pixel_acc(),
         "per_class_iou": meter.per_class_iou(),
     }
+
+
+def _loaders(cfg: RunCfg):
+    tr = build_dataset(cfg.data, "train")
+    va = build_dataset(cfg.data, "val")
+    kw = dict(num_workers=cfg.data.num_workers, pin_memory=torch.cuda.is_available())
+    return (
+        DataLoader(tr, cfg.data.batch_size, shuffle=True, drop_last=True, **kw),
+        DataLoader(va, cfg.data.batch_size, shuffle=False, **kw),
+    )
+
+
+def run(cfg: RunCfg, force: bool = False) -> dict:
+    run_dir = make_run_dir(cfg.out_dir, cfg.run_id)
+    if (run_dir / "metrics.json").exists() and not force:
+        return {**read_json_safe(run_dir / "metrics.json"), "skipped": True}
+    seed_everything(cfg.train.seed)
+    device = get_device()
+    if cfg.backbone.name != "tiny" and cfg.backbone.img_size != cfg.data.img_size:
+        raise ValueError(
+            f"backbone.img_size={cfg.backbone.img_size} != data.img_size={cfg.data.img_size}"
+        )
+
+    # Normalisation must match the checkpoint; resolve it before datasets are built.
+    probe = build_backbone(cfg.backbone)
+    cfg.data.mean, cfg.data.std = normalization_for(probe)
+    del probe
+    save_config(cfg, run_dir / "config.yaml")
+
+    train_loader, val_loader = _loaders(cfg)
+    bb, head, info = build_model(cfg, device, val_loader, run_dir)
+    k = num_classes(cfg.data.name)
+    bg = background_class_ids(cfg.data.name)
+
+    groups = [{"params": head.parameters(), "lr": cfg.train.lr}]
+    bb_params = [p for p in bb.parameters() if p.requires_grad]
+    if bb_params:
+        lr_bb = cfg.train.lr if cfg.train.mode == "lora" else cfg.train.lr_backbone
+        groups.append({"params": bb_params, "lr": lr_bb})
+    opt = torch.optim.AdamW(groups, weight_decay=cfg.train.weight_decay)
+    steps = max(cfg.train.epochs * len(train_loader), 1)
+    sched = torch.optim.lr_scheduler.LambdaLR(
+        opt, lambda s: 0.5 * (1 + math.cos(math.pi * min(s, steps) / steps))
+    )
+
+    best, best_state = -1.0, None
+    with Timer() as wall:
+        for epoch in range(cfg.train.epochs):
+            with Timer() as t:
+                loss = train_one_epoch(
+                    bb, head, train_loader, opt, sched, device, cfg.train.amp, cfg.train.mode
+                )
+            ev = evaluate(bb, head, val_loader, k, bg, device, cfg.train.amp)
+            append_csv_row(
+                run_dir / "log.csv",
+                {
+                    "epoch": epoch,
+                    "train_loss": loss,
+                    "val_miou": ev["miou"],
+                    "val_pixel_acc": ev["pixel_acc"],
+                    "lr": opt.param_groups[0]["lr"],
+                    "epoch_seconds": t.seconds,
+                },
+            )
+            if ev["miou"] > best:
+                best = ev["miou"]
+                best_state = {
+                    "head": {k_: v.cpu() for k_, v in head.state_dict().items()},
+                    "lora": lora_state_dict(bb),
+                    # full fine-tune has no adapter to save; keep the whole backbone
+                    # (gitignored .pt)
+                    "backbone": (
+                        {k_: v.cpu() for k_, v in bb.state_dict().items()}
+                        if cfg.train.mode == "full"
+                        else None
+                    ),
+                }
+            print(
+                f"[{cfg.run_id}] epoch {epoch} loss {loss:.4f} val mIoU {ev['miou']:.4f}",
+                flush=True,
+            )
+
+    torch.save(best_state, run_dir / "head_lora.pt")
+    head.load_state_dict(best_state["head"])
+    if best_state["backbone"] is not None:
+        bb.load_state_dict(best_state["backbone"])
+    elif best_state["lora"]:
+        bb.load_state_dict(best_state["lora"], strict=False)
+    final = evaluate(
+        bb, head, val_loader, k, bg, device, cfg.train.amp, per_image_path=run_dir / "per_image.csv"
+    )
+
+    metrics = {
+        "skipped": False,
+        "best_miou": best,
+        "final_miou": final["miou"],
+        "pixel_acc": final["pixel_acc"],
+        "per_class_iou": final["per_class_iou"],
+        "epochs": cfg.train.epochs,
+        "trainable_params": info["trainable_params"],
+        "total_params": info["total_params"],
+        "head_params": info["head_params"],
+        "wall_seconds": wall.seconds,
+    }
+    write_json(metrics, run_dir / "metrics.json")
+
+    if cfg.diagnostics:
+        bb.eval()
+        x, _ = next(iter(val_loader))
+        diag = {
+            "num_register_neurons": info["num_register_neurons"],
+            "outlier_stats": info["outlier_stats"],
+        }
+
+        # Throughput first: attention_entropy disables fused attention and would slow the backbone.
+        # Measured under the same autocast as evaluation so images/s describes what actually ran.
+        def _fwd(t):
+            with _autocast(device, cfg.train.amp):
+                return bb.forward_features(t)
+
+        diag["images_per_s"] = measure_throughput(_fwd, x.to(device))
+        diag["throughput_dtype"] = "bf16" if (cfg.train.amp and device.type == "cuda") else "fp32"
+        n = cfg.data.calib_images
+        # H1 primary: fixed tau from the frozen model, at the model-specific outlier layer.
+        diag["outlier_fraction"] = outlier_fraction(bb, val_loader, info["stats"], max_images=n)
+        diag["outlier_fraction_last_layer"] = outlier_fraction(
+            bb, val_loader, info["stats_last"], max_images=n
+        )
+        # H1 robustness: recalibrate tau on the trained model; if LoRA only rescaled the residual
+        # stream, this fraction stays put while the fixed-tau one moves.
+        recal = calibrate_outlier_threshold(
+            bb, val_loader, layer=cfg.backbone.outlier_layer, max_images=n
+        )
+        diag["outlier_stats_post"] = recal.__dict__
+        diag["outlier_fraction_recalibrated"] = outlier_fraction(
+            bb, val_loader, recal, max_images=n
+        )
+        diag["attn_entropy"] = attention_entropy(
+            bb, val_loader, layers=[bb.depth - 1], max_images=16
+        )
+        write_json(diag, run_dir / "diagnostics.json")
+    return metrics
+
+
+def read_json_safe(p: Path) -> dict:
+    try:
+        return read_json(p)
+    except Exception:
+        return {}
+
+
+def main(argv=None) -> None:
+    ap = argparse.ArgumentParser(description="Run one factorial cell")
+    ap.add_argument("--config", default=None)
+    ap.add_argument("--force", action="store_true")
+    ap.add_argument("overrides", nargs="*", help="key=value OmegaConf dotlist overrides")
+    args = ap.parse_args(argv)
+    cfg = load_config(args.config, args.overrides)
+    m = run(cfg, force=args.force)
+    print({k: v for k, v in m.items() if k != "per_class_iou"})
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
