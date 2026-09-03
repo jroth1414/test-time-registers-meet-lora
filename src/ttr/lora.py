@@ -87,3 +87,28 @@ def apply_lora(bb: Backbone, cfg: LoraCfg) -> list[str]:
             attn.proj = LoRALinear(attn.proj, cfg.r, cfg.alpha, None, cfg.dropout)
             wrapped.append(f"blocks.{i}.attn.proj")
     return wrapped
+
+
+def count_params(module: nn.Module) -> tuple[int, int]:
+    total = sum(p.numel() for p in module.parameters())
+    trainable = sum(p.numel() for p in module.parameters() if p.requires_grad)
+    return trainable, total
+
+
+def set_trainable(bb: Backbone, mode: str) -> None:
+    if mode == "frozen":
+        for p in bb.parameters():
+            p.requires_grad_(False)
+    elif mode == "full":
+        for p in bb.parameters():
+            p.requires_grad_(True)
+    elif mode == "lora":
+        n_lora = 0
+        for name, p in bb.named_parameters():
+            is_lora = "lora_" in name
+            p.requires_grad_(is_lora)
+            n_lora += int(is_lora)
+        if n_lora == 0:
+            raise RuntimeError("mode='lora' but apply_lora was not called")
+    else:
+        raise ValueError(f"unknown train mode {mode!r}")

@@ -3,7 +3,7 @@ from torch import nn
 
 from ttr.backbone import tiny_backbone
 from ttr.config import LoraCfg
-from ttr.lora import LoRALinear, apply_lora, qkv_out_index
+from ttr.lora import LoRALinear, apply_lora, count_params, qkv_out_index, set_trainable
 
 
 def test_lora_linear_is_identity_at_init():
@@ -83,3 +83,37 @@ def test_apply_lora_preserves_forward_at_init():
     before = bb.forward_features(x)
     apply_lora(bb, LoraCfg(enabled=True, r=4))
     assert torch.allclose(before, bb.forward_features(x), atol=1e-6)
+
+
+def test_frozen_mode_freezes_everything():
+    bb = tiny_backbone()
+    set_trainable(bb, "frozen")
+    tr, total = count_params(bb)
+    assert tr == 0 and total > 0
+
+
+def test_lora_mode_trains_only_adapters():
+    bb = tiny_backbone(depth=2, embed_dim=32)
+    apply_lora(bb, LoraCfg(enabled=True, r=2, targets=["q", "v"]))
+    set_trainable(bb, "lora")
+    tr, total = count_params(bb)
+    # per layer: A (2 x 32) + B (64 x 2) = 64 + 128 = 192; two layers = 384
+    assert tr == 384
+    assert tr < total
+    for n, p in bb.named_parameters():
+        assert p.requires_grad == ("lora_" in n)
+
+
+def test_full_mode_trains_everything():
+    bb = tiny_backbone()
+    set_trainable(bb, "full")
+    tr, total = count_params(bb)
+    assert tr == total
+
+
+def test_lora_mode_without_adapters_is_an_error():
+    import pytest
+
+    bb = tiny_backbone()
+    with pytest.raises(RuntimeError):
+        set_trainable(bb, "lora")
