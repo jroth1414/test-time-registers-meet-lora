@@ -43,7 +43,7 @@ def test_pairs_mismatch_raises(tmp_path: Path):
     extra = root / "ADEChallengeData2016" / "images" / "training" / "ADE_training_99999999.jpg"
     src = root / "ADEChallengeData2016" / "images" / "training" / "ADE_training_00000000.jpg"
     extra.write_bytes(src.read_bytes())
-    with pytest.raises(ValueError, match="do not line up"):
+    with pytest.raises(ValueError, match="images under"):
         ade20k_pairs(root, "train")
 
 
@@ -56,5 +56,5 @@ def test_pairs_stem_mismatch_raises(tmp_path: Path):
     old_label = base / "ADE_training_00000000.png"
     new_label = base / "ADE_training_00000009.png"
     old_label.rename(new_label)
-    with pytest.raises(ValueError, match="do not line up"):
+    with pytest.raises(ValueError, match="is paired with"):
         ade20k_pairs(root, "train")

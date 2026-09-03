@@ -15,22 +15,30 @@ _BACKGROUND = {"ade20k": ADE20K_BACKGROUND_IDS, "synthetic": [0]}
 
 
 def num_classes(name: str) -> int:
+    if name not in _NUM_CLASSES:
+        raise KeyError(f"unknown dataset {name!r}")
     return _NUM_CLASSES[name]
 
 
 def background_class_ids(name: str) -> list[int]:
+    if name not in _BACKGROUND:
+        raise KeyError(f"unknown dataset {name!r}")
     return list(_BACKGROUND[name])
 
 
 def build_dataset(cfg: DataCfg, split: str) -> Dataset:
+    if cfg.name not in _NUM_CLASSES:
+        raise KeyError(f"unknown dataset {cfg.name!r}")
     if split not in ("train", "val"):
         raise ValueError(split)
-    tf = (train_transform if split == "train" else eval_transform)(cfg.img_size, cfg.mean, cfg.std)
     if cfg.name == "synthetic":
         n = 32 if split == "train" else 8
         seed = 0 if split == "train" else 1
         return SyntheticSegDataset(n, cfg.img_size, seed=seed)
     if cfg.name == "ade20k":
+        tf = (train_transform if split == "train" else eval_transform)(
+            cfg.img_size, cfg.mean, cfg.std
+        )
         imgs, labs = ade20k_pairs(cfg.root, split)
         return SegFolderDataset(imgs, labs, tf, ade20k_label_fn)
     raise KeyError(f"unknown dataset {cfg.name!r}")

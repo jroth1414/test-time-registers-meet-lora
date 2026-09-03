@@ -8,7 +8,7 @@ import numpy as np
 
 ADE20K_NUM_CLASSES = 150
 # Homogeneous-background classes for H3 (0-indexed ADE150 ids): wall, sky, floor, ceiling,
-# road, water, sea. Verify against objectInfo150.txt in the download and adjust if needed.
+# road, water, sea. Verified against objectInfo150.txt (see docs/DATA.md).
 ADE20K_BACKGROUND_IDS = [0, 2, 3, 5, 6, 21, 26]
 
 _SPLIT = {"train": "training", "val": "validation"}
@@ -22,13 +22,24 @@ def ade20k_label_fn(arr: np.ndarray) -> np.ndarray:
 
 def ade20k_pairs(root: str | Path, split: str) -> tuple[list[Path], list[Path]]:
     base = Path(root) / "ADEChallengeData2016"
+    if split not in _SPLIT:
+        raise ValueError(f"split must be one of {sorted(_SPLIT)}, got {split!r}")
     sub = _SPLIT[split]
-    imgs = sorted((base / "images" / sub).glob("*.jpg"))
-    labs = sorted((base / "annotations" / sub).glob("*.png"))
+    img_dir = base / "images" / sub
+    ann_dir = base / "annotations" / sub
+    imgs = sorted(img_dir.glob("*.jpg"))
+    labs = sorted(ann_dir.glob("*.png"))
     if not imgs:
-        raise FileNotFoundError(f"no ADE20K images under {base / 'images' / sub}; see docs/DATA.md")
+        raise FileNotFoundError(f"no ADE20K images under {img_dir}; see docs/DATA.md")
     if len(imgs) != len(labs):
-        raise ValueError("ADE20K images and annotations do not line up")
-    if any(img.stem != lab.stem for img, lab in zip(imgs, labs, strict=True)):
-        raise ValueError("ADE20K images and annotations do not line up")
+        raise ValueError(
+            f"ADE20K images and annotations do not line up: {len(imgs)} images under "
+            f"{img_dir} vs {len(labs)} annotations under {ann_dir}; see docs/DATA.md"
+        )
+    for img, lab in zip(imgs, labs, strict=True):
+        if img.stem != lab.stem:
+            raise ValueError(
+                f"ADE20K images and annotations do not line up: {img.name} is paired "
+                f"with {lab.name}; see docs/DATA.md"
+            )
     return imgs, labs

@@ -16,6 +16,8 @@ def _sample(h=80, w=120):
 
 
 def test_train_transform_shapes_and_label_values():
+    np.random.seed(0)
+    torch.manual_seed(0)
     tf = train_transform(56, MEAN, STD)
     img, lab = _sample()
     x, y = tf(img, lab)

@@ -18,6 +18,12 @@ def test_synthetic_is_deterministic_and_learnable_shape():
     # image colour encodes the label so a 1x1 head can fit it
     for c in y.unique().tolist():
         assert x[:, y == c].std(dim=1).max() < 0.3
+    # classes present are well separated in colour space
+    classes = y.unique().tolist()
+    means = {c: x[:, y == c].mean(dim=1) for c in classes}
+    for i, c1 in enumerate(classes):
+        for c2 in classes[i + 1 :]:
+            assert torch.dist(means[c1], means[c2]) > 0.5
 
 
 def test_registry_synthetic_and_num_classes():

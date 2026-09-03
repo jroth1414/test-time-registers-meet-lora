@@ -1,3 +1,5 @@
+"""Generic image/label-PNG segmentation dataset, joined by sorted-index pairing."""
+
 from __future__ import annotations
 
 from collections.abc import Callable

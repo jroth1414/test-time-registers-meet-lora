@@ -13,8 +13,10 @@ class SyntheticSegDataset(Dataset):
     def __init__(
         self, n: int, img_size: int, num_classes: int = SYNTHETIC_NUM_CLASSES, seed: int = 0
     ):
-        if num_classes > len(_PALETTE):
-            raise ValueError("at most 4 synthetic classes")
+        if not 2 <= num_classes <= len(_PALETTE):
+            raise ValueError(
+                f"num_classes must be between 2 and {len(_PALETTE)}, got {num_classes}"
+            )
         self.n, self.s, self.k, self.seed = n, img_size, num_classes, seed
 
     def __len__(self) -> int:
@@ -31,5 +33,6 @@ class SyntheticSegDataset(Dataset):
             label[y0 : y0 + h, x0 : x0 + w] = c
         img = _PALETTE[label].permute(2, 0, 1)  # (3, s, s)
         img = img + 0.05 * torch.randn(3, s, s, generator=g)
+        # Self-normalised toy data: ignores DataCfg.mean/std on purpose.
         img = (img - 0.5) / 0.5
         return img.float(), label
