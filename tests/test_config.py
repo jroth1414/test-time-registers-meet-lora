@@ -14,6 +14,7 @@ def test_defaults_are_the_documented_ones():
     assert cfg.lora.layers == "all"
     assert cfg.train.mode == "frozen"
     assert cfg.data.mean == [0.485, 0.456, 0.406]
+    assert cfg.backbone.outlier_layer == -1
 
 
 def test_dotlist_overrides_nested_fields():

@@ -21,6 +21,8 @@ class BackboneCfg:
     registers: str = "none"  # "none" | "test_time" | "trained"
     num_test_time_registers: int = 1
     register_neuron_path: str | None = None  # JSON written by ttr.registers
+    # residual layer for tau calibration; see artifacts/register_neurons/README.md
+    outlier_layer: int = -1
     capture_attention: bool = False
 
 
