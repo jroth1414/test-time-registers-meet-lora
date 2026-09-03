@@ -22,23 +22,35 @@ class _Joint:
 
 def _finish(mean, std) -> list:
     return [
-        v2.ToDtype({tv_tensors.Image: torch.float32, tv_tensors.Mask: torch.int64, "others": None},
-                   scale=True),
+        v2.ToDtype(
+            {tv_tensors.Image: torch.float32, tv_tensors.Mask: torch.int64, "others": None},
+            scale=True,
+        ),
         v2.Normalize(mean, std),
     ]
 
 
 def train_transform(img_size: int, mean, std) -> _Joint:
-    return _Joint(v2.Compose([
-        v2.RandomResizedCrop(img_size, scale=(0.25, 1.0), ratio=(0.75, 1.333), antialias=True),
-        v2.RandomHorizontalFlip(),
-        *_finish(mean, std),
-    ]))
+    return _Joint(
+        v2.Compose(
+            [
+                v2.RandomResizedCrop(
+                    img_size, scale=(0.25, 1.0), ratio=(0.75, 1.333), antialias=True
+                ),
+                v2.RandomHorizontalFlip(),
+                *_finish(mean, std),
+            ]
+        )
+    )
 
 
 def eval_transform(img_size: int, mean, std) -> _Joint:
-    return _Joint(v2.Compose([
-        v2.Resize(img_size, antialias=True),        # shorter side -> img_size
-        v2.CenterCrop(img_size),
-        *_finish(mean, std),
-    ]))
+    return _Joint(
+        v2.Compose(
+            [
+                v2.Resize(img_size, antialias=True),  # shorter side -> img_size
+                v2.CenterCrop(img_size),
+                *_finish(mean, std),
+            ]
+        )
+    )
