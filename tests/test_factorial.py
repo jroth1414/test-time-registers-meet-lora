@@ -25,3 +25,8 @@ def test_factorial_cells_and_files(tmp_path: Path):
         reg_path = yaml.safe_load(p.read_text())["backbone"]["register_neuron_path"]
         assert reg_path.startswith("artifacts/res224/register_neurons/")
         assert Path(reg_path).exists(), reg_path
+
+
+def test_factorial_mask_head_suffix(tmp_path):
+    paths = write_configs(tmp_path, dataset="ade20k", seeds=[0], epochs=1, head="mask")
+    assert all(p.name.endswith("__mask.yaml") for p in paths)

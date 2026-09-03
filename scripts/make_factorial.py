@@ -31,14 +31,24 @@ CELLS = [
 
 
 def cell_config(
-    dataset: str, fam: str, mode: str, reg: str, seed: int, epochs: int, root: str
+    dataset: str,
+    fam: str,
+    mode: str,
+    reg: str,
+    seed: int,
+    epochs: int,
+    root: str,
+    head: str = "linear",
 ) -> dict:
     name = BACKBONES[fam]["trained" if reg == "trained" else "none"]
     reg_path = None
     if reg == "test_time":
         reg_path = f"artifacts/res224/register_neurons/{name.replace('.', '_')}.json"
+    run_id = f"{dataset}__{fam}__{mode}__{reg}__s{seed}"
+    if head == "mask":
+        run_id += "__mask"
     return {
-        "run_id": f"{dataset}__{fam}__{mode}__{reg}__s{seed}",
+        "run_id": run_id,
         "backbone": {
             "name": name,
             "img_size": 224,
@@ -53,7 +63,7 @@ def cell_config(
             "alpha": 16.0,
             "targets": ["q", "v"],
         },
-        "head": {"type": "linear"},
+        "head": {"type": head, "hidden": 256},
         "data": {
             "name": dataset,
             "root": root,
@@ -76,13 +86,18 @@ def cell_config(
 
 
 def write_configs(
-    out: Path, dataset="ade20k", seeds=(0, 1, 2), epochs=10, root="data/ade20k"
+    out: Path,
+    dataset="ade20k",
+    seeds=(0, 1, 2),
+    epochs=10,
+    root="data/ade20k",
+    head: str = "linear",
 ) -> list[Path]:
     out = Path(out) / dataset
     out.mkdir(parents=True, exist_ok=True)
     paths = []
     for (fam, mode, reg), seed in itertools.product(CELLS, seeds):
-        cfg = cell_config(dataset, fam, mode, reg, seed, epochs, root)
+        cfg = cell_config(dataset, fam, mode, reg, seed, epochs, root, head)
         p = out / f"{cfg['run_id']}.yaml"
         p.write_text(yaml.safe_dump(cfg, sort_keys=False))
         paths.append(p)
@@ -96,6 +111,7 @@ if __name__ == "__main__":
     ap.add_argument("--root", default="data/ade20k")
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
     ap.add_argument("--epochs", type=int, default=10)
+    ap.add_argument("--head", choices=["linear", "mask"], default="linear")
     a = ap.parse_args()
-    ps = write_configs(a.out, a.dataset, a.seeds, a.epochs, a.root)
+    ps = write_configs(a.out, a.dataset, a.seeds, a.epochs, a.root, a.head)
     print(f"wrote {len(ps)} configs under {Path(a.out) / a.dataset}")

@@ -15,6 +15,7 @@ lora:
   - v
 head:
   type: linear
+  hidden: 256
 data:
   name: ade20k
   root: data/ade20k
