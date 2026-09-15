@@ -8,7 +8,7 @@ import ttr.run as run_mod
 from ttr.config import load_config
 from ttr.data import build_dataset
 from ttr.registers import OutlierStats, RegisterNeurons, save_register_neurons
-from ttr.run import build_model, evaluate, main, run, train_one_epoch
+from ttr.run import build_model, build_optimizer, evaluate, main, run, train_one_epoch
 from ttr.utils import read_json, write_json
 
 
@@ -101,6 +101,31 @@ def test_build_model_grad_checkpoint_full_mode(tmp_results: Path):
     assert info["trainable_params"] > 0
 
 
+def test_build_optimizer_mask_head_has_zero_decay_group(tmp_results: Path):
+    cfg = _cfg("head.type=mask", "head.hidden=16", "head.heads=2", "head.num_layers=1")
+    bb, head, _ = build_model(cfg, torch.device("cpu"), _calib_loader(), tmp_results)
+    opt = build_optimizer(bb, head, cfg)
+    zero_decay_groups = [
+        g for g in opt.param_groups if g["weight_decay"] == 0.0 and len(g["params"]) > 0
+    ]
+    assert zero_decay_groups
+    assert any(any(p is head.queries for p in g["params"]) for g in zero_decay_groups)
+    decay_groups = [g for g in opt.param_groups if g["weight_decay"] == cfg.train.weight_decay]
+    assert any(any(p is head.mem_proj.weight for p in g["params"]) for g in decay_groups)
+
+
+def test_build_optimizer_frozen_linear_head_two_groups_no_backbone(tmp_results: Path):
+    cfg = _cfg()
+    bb, head, _ = build_model(cfg, torch.device("cpu"), _calib_loader(), tmp_results)
+    opt = build_optimizer(bb, head, cfg)
+    assert len(opt.param_groups) == 2
+    decay = [g for g in opt.param_groups if g["weight_decay"] == cfg.train.weight_decay]
+    no_decay = [g for g in opt.param_groups if g["weight_decay"] == 0.0]
+    assert len(decay) == 1 and len(no_decay) == 1
+    assert any(p is head.cls.weight for p in decay[0]["params"])
+    assert any(p is head.cls.bias for p in no_decay[0]["params"])
+
+
 @pytest.mark.filterwarnings("ignore:Detected call of .lr_scheduler.step.*:UserWarning")
 def test_train_skips_all_ignore_batches(tmp_results: Path):
     cfg = _cfg()
@@ -163,6 +188,8 @@ def test_run_end_to_end_writes_all_artifacts(tmp_results: Path):
         "images_per_s",
         "recalibrated",
     } <= set(diag)
+    assert {"norm_quantiles", "norm_ratio_p999", "norm_ratio_max"} <= set(diag)
+    assert diag["norm_ratio_max"] >= diag["norm_ratio_p999"] >= 1.0
     per_image = pd.read_csv(d / "per_image.csv")
     assert len(per_image) == 8
     log_lines = (d / "log.csv").read_text().strip().splitlines()

@@ -30,6 +30,7 @@ from ttr.registers import (
     install_test_time_registers,
     load_register_neurons,
     outlier_fraction,
+    patch_norm_quantiles,
     save_register_neurons,
 )
 from ttr.utils import (
@@ -226,6 +227,29 @@ def _is_complete(run_dir: Path, cfg: RunCfg) -> bool:
     return True
 
 
+def build_optimizer(bb: Backbone, head: nn.Module, cfg: RunCfg) -> torch.optim.AdamW:
+    """AdamW parameter groups, split decay / no-decay: LayerNorm gains, biases (any 1-D
+    parameter), and the mask head's query table (`head.queries`) never get weight decay.
+    """
+
+    def _groups(params: list[torch.Tensor], lr: float) -> list[dict]:
+        no_decay = [p for p in params if p.ndim <= 1 or p is getattr(head, "queries", None)]
+        decay = [p for p in params if not (p.ndim <= 1 or p is getattr(head, "queries", None))]
+        out = []
+        if decay:
+            out.append({"params": decay, "lr": lr, "weight_decay": cfg.train.weight_decay})
+        if no_decay:
+            out.append({"params": no_decay, "lr": lr, "weight_decay": 0.0})
+        return out
+
+    groups = _groups(list(head.parameters()), cfg.train.lr)
+    bb_params = [p for p in bb.parameters() if p.requires_grad]
+    if bb_params:
+        lr_bb = cfg.train.lr if cfg.train.mode == "lora" else cfg.train.lr_backbone
+        groups += _groups(bb_params, lr_bb)
+    return torch.optim.AdamW(groups, weight_decay=cfg.train.weight_decay)
+
+
 def run(cfg: RunCfg, force: bool = False) -> dict:
     run_dir = make_run_dir(cfg.out_dir, cfg.run_id)
     if _is_complete(run_dir, cfg) and not force:
@@ -251,12 +275,7 @@ def run(cfg: RunCfg, force: bool = False) -> dict:
 
     extra_fn = extra_metrics_fn(cfg.data.name)
 
-    groups = [{"params": head.parameters(), "lr": cfg.train.lr}]
-    bb_params = [p for p in bb.parameters() if p.requires_grad]
-    if bb_params:
-        lr_bb = cfg.train.lr if cfg.train.mode == "lora" else cfg.train.lr_backbone
-        groups.append({"params": bb_params, "lr": lr_bb})
-    opt = torch.optim.AdamW(groups, weight_decay=cfg.train.weight_decay)
+    opt = build_optimizer(bb, head, cfg)
     steps = max(cfg.train.epochs * len(train_loader), 1)
     warm = max(int(0.05 * steps), 1)
 
@@ -371,6 +390,10 @@ def run(cfg: RunCfg, force: bool = False) -> dict:
                 bb, val_loader, recal, max_images=n
             )
             diag["recalibrated"] = True
+        nq = patch_norm_quantiles(bb, val_loader, layer=cfg.backbone.outlier_layer, max_images=n)
+        diag["norm_quantiles"] = nq
+        diag["norm_ratio_p999"] = nq["q999"] / max(nq["q50"], 1e-9)
+        diag["norm_ratio_max"] = nq["max"] / max(nq["q50"], 1e-9)
         diag["attn_entropy"] = attention_entropy(
             bb, val_loader, layers=[bb.depth - 1], max_images=16
         )

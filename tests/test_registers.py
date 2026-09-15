@@ -16,6 +16,7 @@ from ttr.registers import (
     load_register_neurons,
     outlier_fraction,
     outlier_mask,
+    patch_norm_quantiles,
     patch_norms,
     save_register_neurons,
     score_register_neurons,
@@ -313,6 +314,14 @@ def test_resolve_layer_raises_out_of_range():
         _resolve_layer(bb, -3)
     assert _resolve_layer(bb, -1) == 1
     assert _resolve_layer(bb, 0) == 0
+
+
+def test_patch_norm_quantiles_monotone_and_ratio():
+    bb = tiny_backbone(depth=2)
+    q = patch_norm_quantiles(bb, _loader(n_batches=2), layer=-1, max_images=4)
+    assert list(q) == ["q50", "q99", "q999", "max"]
+    assert q["q50"] <= q["q99"] <= q["q999"] <= q["max"]
+    assert q["max"] > 0
 
 
 def test_calibrate_raises_on_empty_loader():

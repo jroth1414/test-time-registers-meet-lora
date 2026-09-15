@@ -106,6 +106,26 @@ def outlier_fraction(
     return hits / max(total, 1)
 
 
+@torch.no_grad()
+def patch_norm_quantiles(
+    bb: Backbone, loader: Iterable, layer: int = -1, max_images: int = 64
+) -> dict[str, float]:
+    """Quantiles of patch-token norms at `layer` over up to max_images images (scale-free when
+    divided by q50; comparable across backbones, unlike the tau-relative outlier fraction)."""
+    layer = _resolve_layer(bb, layer)
+    dev = next(bb.parameters()).device
+    norms, seen = [], 0
+    for batch in loader:
+        x = _images(batch).to(dev)
+        norms.append(patch_norms(bb, x, layer).flatten().float().cpu())
+        seen += x.shape[0]
+        if seen >= max_images:
+            break
+    n = torch.cat(norms)
+    qs = torch.quantile(n, torch.tensor([0.5, 0.99, 0.999]))
+    return {"q50": qs[0].item(), "q99": qs[1].item(), "q999": qs[2].item(), "max": n.max().item()}
+
+
 def score_register_neurons(acts: dict[int, Tensor], outlier: Tensor) -> dict[int, Tensor]:
     """Per-layer, per-neuron score: mean |activation| on outlier tokens minus on normal tokens,
     divided by the overall std so layers are comparable. acts[l] is (B, P, H) patch-only.
