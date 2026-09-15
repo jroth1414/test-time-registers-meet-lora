@@ -52,6 +52,22 @@ CLIP passes comfortably at 224 px (ratio 0.004, same as 518 px) with the same lo
 `--quantile`/`--max-neurons` flags; its outlier signature at the last layer is not resolution-
 sensitive in the same way, so it was not part of this tuning round.
 
+## 448 px (Cityscapes and LaRS resolution)
+
+Same detector flags as the 224 px table above, run at `--img-size 448` (Cityscapes and LaRS's
+factorial resolution) and written to `artifacts/res448/` instead of `artifacts/res224/`.
+`scripts/make_factorial.py` points the Cityscapes and LaRS `test_time` cells at these maps. Same
+64-image calibration set and `< 0.2 * before` acceptance bar as the 224 px table.
+
+| checkpoint | flags | outlier frac before | after | ratio | neurons | result |
+|---|---|---|---|---|---|---|
+| vit_small_patch14_dinov2.lvd142m | `--layer -3 --quantile 0.99 --max-neurons 200 --k 3 --img-size 448` | 0.0207 | 0.0029 | 0.138 | 185 | PASS |
+| vit_base_patch14_dinov2.lvd142m | `--layer 8 --quantile 0.995 --max-neurons 200 --k 4 --img-size 448` | 0.0169 | 0.0005 | 0.032 | 185 | PASS |
+| vit_base_patch16_clip_224.openai | `--img-size 448 --quantile 0.995 --max-neurons 200` | 0.0432 | 0.0010 | 0.023 | 185 | PASS |
+
+CLS attention entropy moves in opposite directions across the two families at 448 px. DINOv2-S
+rises from 5.69 to 5.79 and DINOv2-B rises from 5.20 to 5.78, while CLIP falls from 4.34 to 3.70.
+
 ## 224 px detector tuning
 
 One bounded round of hyper-parameter tuning, run on `data/calib` (200 ADE20K validation JPEGs,
