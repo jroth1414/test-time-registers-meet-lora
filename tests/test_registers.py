@@ -330,3 +330,11 @@ def test_calibrate_raises_on_empty_loader():
     bb = tiny_backbone(depth=2)
     with pytest.raises(ValueError):
         calibrate_outlier_threshold(bb, [], layer=-1)
+
+
+def test_patch_norm_quantiles_raises_on_empty_loader():
+    import pytest
+
+    bb = tiny_backbone(depth=2)
+    with pytest.raises(ValueError, match="loader yielded no images"):
+        patch_norm_quantiles(bb, [], layer=-1)

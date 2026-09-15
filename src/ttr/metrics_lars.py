@@ -1,4 +1,10 @@
-"""Proxy maritime metrics: boundary F1 of the water region and pixel F1 of obstacles."""
+"""Proxy maritime metrics: boundary F1 of the water region and pixel F1 of obstacles.
+
+Boundary pixels within one pixel of a void (ignore_index) label are dropped from both the
+prediction and target boundary sets, on both sides of the comparison: a void blob otherwise
+draws a closed ring in the target boundary that no prediction can match, and would also count
+a prediction that fills the void differently from its surroundings as a boundary error.
+"""
 
 from __future__ import annotations
 
@@ -24,8 +30,9 @@ def boundary_f1(
     pred: Tensor, target: Tensor, class_id: int, tol: int = 10, ignore_index: int = 255
 ) -> float:
     valid = target != ignore_index
-    pb = _boundary(pred == class_id) & valid
-    tb = _boundary(target == class_id) & valid
+    near_ignore = _dilate(target == ignore_index, 1)
+    pb = _boundary(pred == class_id) & valid & ~near_ignore
+    tb = _boundary(target == class_id) & valid & ~near_ignore
     if tb.sum() == 0 and pb.sum() == 0:
         return math.nan
     precision = (pb & _dilate(tb, tol)).sum() / max(int(pb.sum()), 1)

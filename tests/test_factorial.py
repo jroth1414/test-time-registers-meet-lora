@@ -50,3 +50,4 @@ def test_factorial_lars_test_time_uses_res448_neuron_maps(tmp_path):
     for p in tt_paths:
         reg_path = yaml.safe_load(p.read_text())["backbone"]["register_neuron_path"]
         assert "artifacts/res448/" in reg_path
+        assert Path(reg_path).exists(), reg_path

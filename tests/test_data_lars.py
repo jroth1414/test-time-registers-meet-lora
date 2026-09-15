@@ -9,8 +9,16 @@ from ttr.data.lars import lars_label_fn, lars_pairs
 
 
 def test_label_fn_identity_with_ignore():
-    raw = np.array([[0, 1], [2, 255]], dtype=np.uint8)
-    assert lars_label_fn(raw).tolist() == [[0, 1], [2, 255]]
+    raw = np.array([[0, 1, 4], [2, 255, 200]], dtype=np.uint8)
+    assert lars_label_fn(raw).tolist() == [[0, 1, 255], [2, 255, 255]]
+
+
+def test_label_fn_raises_on_non_2d_array():
+    import pytest
+
+    raw = np.zeros((4, 4, 3), dtype=np.uint8)
+    with pytest.raises(ValueError, match="2-D"):
+        lars_label_fn(raw)
 
 
 def test_pairs_and_registry(tmp_path: Path):

@@ -229,12 +229,21 @@ def _is_complete(run_dir: Path, cfg: RunCfg) -> bool:
 
 def build_optimizer(bb: Backbone, head: nn.Module, cfg: RunCfg) -> torch.optim.AdamW:
     """AdamW parameter groups, split decay / no-decay: LayerNorm gains, biases (any 1-D
-    parameter), and the mask head's query table (`head.queries`) never get weight decay.
+    parameter), the mask head's query table (`head.queries`), and the backbone's token
+    embeddings (`pos_embed`, `cls_token`, `reg_token`, from `bb.model.no_weight_decay()`)
+    never get weight decay. The token embeddings are 3-D, so the ndim check alone misses
+    them; timm itself excludes them the same way.
     """
+    no_decay_names = set(bb.model.no_weight_decay())
 
-    def _groups(params: list[torch.Tensor], lr: float) -> list[dict]:
-        no_decay = [p for p in params if p.ndim <= 1 or p is getattr(head, "queries", None)]
-        decay = [p for p in params if not (p.ndim <= 1 or p is getattr(head, "queries", None))]
+    def _is_no_decay(name: str | None, p: torch.Tensor) -> bool:
+        if p.ndim <= 1 or p is getattr(head, "queries", None):
+            return True
+        return name is not None and any(name.endswith(suffix) for suffix in no_decay_names)
+
+    def _groups(named_params: list[tuple[str | None, torch.Tensor]], lr: float) -> list[dict]:
+        no_decay = [p for n, p in named_params if _is_no_decay(n, p)]
+        decay = [p for n, p in named_params if not _is_no_decay(n, p)]
         out = []
         if decay:
             out.append({"params": decay, "lr": lr, "weight_decay": cfg.train.weight_decay})
@@ -242,11 +251,11 @@ def build_optimizer(bb: Backbone, head: nn.Module, cfg: RunCfg) -> torch.optim.A
             out.append({"params": no_decay, "lr": lr, "weight_decay": 0.0})
         return out
 
-    groups = _groups(list(head.parameters()), cfg.train.lr)
-    bb_params = [p for p in bb.parameters() if p.requires_grad]
-    if bb_params:
+    groups = _groups([(None, p) for p in head.parameters()], cfg.train.lr)
+    bb_named = [(n, p) for n, p in bb.named_parameters() if p.requires_grad]
+    if bb_named:
         lr_bb = cfg.train.lr if cfg.train.mode == "lora" else cfg.train.lr_backbone
-        groups += _groups(bb_params, lr_bb)
+        groups += _groups(bb_named, lr_bb)
     return torch.optim.AdamW(groups, weight_decay=cfg.train.weight_decay)
 
 
@@ -299,18 +308,19 @@ def run(cfg: RunCfg, force: bool = False) -> dict:
                 )
             ev = evaluate(bb, head, val_loader, k, bg, device, cfg.train.amp, extra_fn=extra_fn)
             best = max(best, ev["miou"])
-            append_csv_row(
-                run_dir / "log.csv",
-                {
-                    "epoch": epoch,
-                    "train_loss": loss,
-                    "val_miou": ev["miou"],
-                    "val_pixel_acc": ev["pixel_acc"],
-                    "lr": lr_start,
-                    "epoch_seconds": t.seconds,
-                    "n_skipped": n_skipped,
-                },
+            row = {
+                "epoch": epoch,
+                "train_loss": loss,
+                "val_miou": ev["miou"],
+                "val_pixel_acc": ev["pixel_acc"],
+                "lr": lr_start,
+                "epoch_seconds": t.seconds,
+                "n_skipped": n_skipped,
+            }
+            row.update(
+                {f"val_{ek[len('extra_') :]}": ev[ek] for ek in ev if ek.startswith("extra_")}
             )
+            append_csv_row(run_dir / "log.csv", row)
             print(
                 f"[{cfg.run_id}] epoch {epoch} loss {loss:.4f} val mIoU {ev['miou']:.4f}",
                 flush=True,

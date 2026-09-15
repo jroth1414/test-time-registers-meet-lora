@@ -33,4 +33,6 @@ Register at lojzezust.github.io/lars-dataset, download images and semantic masks
 and confirm the mask values match `LARS_RAW` in `ttr/data/lars.py`; edit the dict if not.
 Classes: obstacle 0, water 1, sky 2. Background classes for H3: water, sky.
 Our water-edge F1 and obstacle F1 are proxies; report official numbers from the LaRS toolkit
-in the paper.
+in the paper. `water_edge_f1` and `obstacle_f1` are per-image means over the validation split,
+and images with no valid pixels of the relevant class are skipped rather than counted as zero.
+Boundary pixels within one pixel of a void label are dropped from the F1 computation.

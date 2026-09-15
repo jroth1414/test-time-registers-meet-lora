@@ -31,3 +31,20 @@ def test_lars_extra_metrics_keys():
     t = _scene(10)
     out = lars_extra_metrics(t, t)
     assert set(out) == {"water_edge_f1", "obstacle_f1"}
+
+
+def _scene_with_void():
+    t = _scene(10)
+    t[14:18, 10:15] = 255  # 4x5 void blob inside water
+    return t
+
+
+def test_boundary_f1_ignores_void_blob_boundary():
+    t = _scene_with_void()
+    perfect = t.clone()
+    perfect[14:18, 10:15] = 1  # a real model must label the void with some class
+    assert boundary_f1(perfect, t, class_id=1, tol=2) == 1.0
+
+    invents_obstacle = t.clone()
+    invents_obstacle[14:18, 10:15] = 0  # invents an obstacle inside the void
+    assert boundary_f1(invents_obstacle, t, class_id=1, tol=2) == 1.0

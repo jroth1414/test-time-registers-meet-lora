@@ -111,7 +111,10 @@ def patch_norm_quantiles(
     bb: Backbone, loader: Iterable, layer: int = -1, max_images: int = 64
 ) -> dict[str, float]:
     """Quantiles of patch-token norms at `layer` over up to max_images images (scale-free when
-    divided by q50; comparable across backbones, unlike the tau-relative outlier fraction)."""
+    divided by q50; comparable across backbones, unlike the tau-relative outlier fraction).
+    torch.quantile fails above 2**24 elements, so norms are subsampled to 2**24 with a
+    fixed-seed permutation when there are more.
+    """
     layer = _resolve_layer(bb, layer)
     dev = next(bb.parameters()).device
     norms, seen = [], 0
@@ -121,7 +124,12 @@ def patch_norm_quantiles(
         seen += x.shape[0]
         if seen >= max_images:
             break
+    if not norms:
+        raise ValueError("patch_norm_quantiles: loader yielded no images")
     n = torch.cat(norms)
+    if n.numel() > 2**24:
+        perm = torch.randperm(n.numel(), generator=torch.Generator().manual_seed(0))
+        n = n[perm[: 2**24]]
     qs = torch.quantile(n, torch.tensor([0.5, 0.99, 0.999]))
     return {"q50": qs[0].item(), "q99": qs[1].item(), "q999": qs[2].item(), "max": n.max().item()}
 

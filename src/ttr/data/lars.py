@@ -15,6 +15,11 @@ for _name, _v in LARS_RAW.items():
 
 
 def lars_label_fn(arr: np.ndarray) -> np.ndarray:
+    if arr.ndim != 2:
+        raise ValueError(
+            f"LaRS mask must be a 2-D index image, got shape {arr.shape}; "
+            "run scripts/inspect_lars.py"
+        )
     return _LUT[arr.astype(np.int64)]
 
 

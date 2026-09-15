@@ -114,6 +114,22 @@ def test_build_optimizer_mask_head_has_zero_decay_group(tmp_results: Path):
     assert any(any(p is head.mem_proj.weight for p in g["params"]) for g in decay_groups)
 
 
+def test_build_optimizer_full_mode_no_decay_for_token_embeddings(tmp_results: Path):
+    cfg = _cfg("train.mode=full")
+    bb, head, _ = build_model(cfg, torch.device("cpu"), _calib_loader(), tmp_results)
+    opt = build_optimizer(bb, head, cfg)
+    no_decay_params = [p for g in opt.param_groups if g["weight_decay"] == 0.0 for p in g["params"]]
+    decay_params = [
+        p
+        for g in opt.param_groups
+        if g["weight_decay"] == cfg.train.weight_decay
+        for p in g["params"]
+    ]
+    assert any(p is bb.model.pos_embed for p in no_decay_params)
+    assert any(p is bb.model.cls_token for p in no_decay_params)
+    assert any(p is bb.model.blocks[0].attn.qkv.weight for p in decay_params)
+
+
 def test_build_optimizer_frozen_linear_head_two_groups_no_backbone(tmp_results: Path):
     cfg = _cfg()
     bb, head, _ = build_model(cfg, torch.device("cpu"), _calib_loader(), tmp_results)
@@ -298,6 +314,22 @@ def test_cli_force_flag_reruns(tmp_results: Path, capsys):
     assert "'skipped': True" in capsys.readouterr().out
     main(argv + ["--force"])
     assert "'skipped': False" in capsys.readouterr().out
+
+
+def test_run_logs_per_epoch_extras_to_log_csv(tmp_results: Path, monkeypatch):
+    monkeypatch.setattr(run_mod, "extra_metrics_fn", lambda name: lambda p, t: {"dummy": 1.0})
+    cfg = _cfg(f"out_dir={tmp_results.as_posix()}", "run_id=extras", "train.epochs=1")
+    m = run(cfg)
+    header = (tmp_results / "extras" / "log.csv").read_text().splitlines()[0]
+    assert "val_dummy" in header
+    assert m["extra_dummy"] == 1.0
+
+
+def test_run_without_extras_has_no_extra_val_columns_in_log_csv(tmp_results: Path):
+    cfg = _cfg(f"out_dir={tmp_results.as_posix()}", "run_id=noextras", "train.epochs=1")
+    run(cfg)
+    header = (tmp_results / "noextras" / "log.csv").read_text().splitlines()[0]
+    assert header.strip() == "epoch,train_loss,val_miou,val_pixel_acc,lr,epoch_seconds,n_skipped"
 
 
 def test_evaluate_extra_metrics_are_reported(tmp_results: Path):
