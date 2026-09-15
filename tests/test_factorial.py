@@ -3,6 +3,7 @@ from pathlib import Path
 import yaml
 
 from scripts.make_factorial import CELLS, write_configs
+from ttr.config import load_config
 
 
 def test_factorial_cells_and_files(tmp_path: Path):
@@ -12,6 +13,7 @@ def test_factorial_cells_and_files(tmp_path: Path):
     assert len(paths) == 72 and len(CELLS) == 24
     cfg = yaml.safe_load(paths[0].read_text())
     assert cfg["run_id"].startswith("ade20k__")
+    assert not any("__mask" in p.name for p in paths)
     trained = [p for p in paths if "__trained__" in p.name]
     assert all("reg4" in yaml.safe_load(p.read_text())["backbone"]["name"] for p in trained)
     assert not any("clip" in p.name and "__trained__" in p.name for p in paths)
@@ -30,3 +32,5 @@ def test_factorial_cells_and_files(tmp_path: Path):
 def test_factorial_mask_head_suffix(tmp_path):
     paths = write_configs(tmp_path, dataset="ade20k", seeds=[0], epochs=1, head="mask")
     assert all(p.name.endswith("__mask.yaml") for p in paths)
+    cfg = load_config(str(paths[0]))
+    assert cfg.head.type == "mask"

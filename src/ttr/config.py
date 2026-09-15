@@ -40,6 +40,9 @@ class LoraCfg:
 class HeadCfg:
     type: str = "linear"  # "linear" | "mask"
     hidden: int = 256
+    num_layers: int = 2  # mask head only
+    heads: int = 8  # mask head only
+    upsample: int = 4  # mask head only
 
 
 @dataclass

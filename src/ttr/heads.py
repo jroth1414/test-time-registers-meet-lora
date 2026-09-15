@@ -25,5 +25,12 @@ def build_head(cfg: HeadCfg, in_dim: int, num_classes: int) -> nn.Module:
     if cfg.type == "mask":
         from ttr.mask_head import MaskHead  # chunk 8
 
-        return MaskHead(in_dim, num_classes, hidden=cfg.hidden)
+        return MaskHead(
+            in_dim,
+            num_classes,
+            hidden=cfg.hidden,
+            num_layers=cfg.num_layers,
+            heads=cfg.heads,
+            upsample=cfg.upsample,
+        )
     raise ValueError(f"unknown head type {cfg.type!r}")

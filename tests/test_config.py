@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from omegaconf.errors import ConfigKeyError
 
-from ttr.config import DataCfg, LoraCfg, RunCfg, load_config, save_config
+from ttr.config import DataCfg, HeadCfg, LoraCfg, RunCfg, load_config, save_config
 
 
 def test_defaults_are_the_documented_ones():
@@ -46,3 +46,10 @@ def test_unknown_key_is_rejected():
 def test_sub_configs_are_plain_dataclasses():
     assert LoraCfg().r == 8
     assert DataCfg().name == "ade20k"
+
+
+def test_head_cfg_mask_defaults():
+    cfg = HeadCfg()
+    assert cfg.num_layers == 2
+    assert cfg.heads == 8
+    assert cfg.upsample == 4
