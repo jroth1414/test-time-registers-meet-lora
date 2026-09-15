@@ -3,7 +3,7 @@ import warnings
 from pathlib import Path
 
 from tests.fake_results import make_run, standard_tree
-from ttr.analysis import collect, h1, h2, paired, summarize
+from ttr.analysis import collect, h1, h2, h3, main, paired, summarize
 
 
 def test_collect_flattens_runs(tmp_path: Path):
@@ -171,3 +171,29 @@ def test_paired_zero_variance_no_scipy_warning(tmp_path: Path):
     assert r["t"] == math.inf
     assert r["p"] == 0.0
     assert r["n"] == 2
+
+
+def test_h3_spearman_positive_when_gain_tracks_background(tmp_path: Path):
+    per_none = [(0.5, 0.1), (0.5, 0.5), (0.5, 0.9)]
+    per_tt = [(0.51, 0.1), (0.55, 0.5), (0.60, 0.9)]  # gain grows with bg fraction
+    make_run(tmp_path, "lars", "vits", "lora", "none", 0, 0.5, 0.05, per_image=per_none)
+    make_run(tmp_path, "lars", "vits", "lora", "test_time", 0, 0.55, 0.01, per_image=per_tt)
+    df = collect(tmp_path)
+    r = h3(tmp_path, df).iloc[0]
+    assert r["spearman_rho"] > 0.99 and r["mean_gain"] > 0
+    assert math.isclose(r["mean_bg_fraction"], 0.5)
+
+
+def test_cli_writes_tables_and_figures(tmp_path: Path):
+    standard_tree(tmp_path / "results")
+    main(["--results", str(tmp_path / "results"), "--out", str(tmp_path / "out")])
+    for f in ("summary.md", "summary.csv", "h1.md", "h2.md", "h3.md", "miou_by_cell.png"):
+        assert (tmp_path / "out" / f).exists(), f
+
+
+def test_cli_no_finished_runs_returns_without_writing_tables(tmp_path: Path):
+    empty_results = tmp_path / "results"
+    empty_results.mkdir()
+    out = tmp_path / "out"
+    main(["--results", str(empty_results), "--out", str(out)])
+    assert not (out / "summary.md").exists()

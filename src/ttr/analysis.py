@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import math
 from pathlib import Path
 
@@ -214,3 +215,95 @@ def h2(df: pd.DataFrame, threshold: float = 0.5) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows).astype({"H2": object})
+
+
+def h3(results_root: str | Path, df: pd.DataFrame) -> pd.DataFrame:
+    """Per (dataset, fam, head): Spearman correlation between per-image background fraction and the
+    per-image IoU gain of LoRA+test-time registers over LoRA alone, matched by seed and image index.
+    """
+    rows = []
+    root = Path(results_root)
+    for (ds, fam, head), g in _groups(df):
+        gains, bgs = [], []
+        for seed in sorted(g["seed"].unique()):
+            a = _cell(g, {"mode": "lora", "registers": "test_time", "seed": seed})
+            b = _cell(g, {"mode": "lora", "registers": "none", "seed": seed})
+            if a.empty or b.empty:
+                continue
+            pa = root / a.iloc[0]["run_id"] / "per_image.csv"
+            pb = root / b.iloc[0]["run_id"] / "per_image.csv"
+            if not (pa.exists() and pb.exists()):
+                continue
+            da, db = pd.read_csv(pa), pd.read_csv(pb)
+            m = da.merge(db, on="index", suffixes=("_tt", "_none")).dropna()
+            gains += (m["miou_tt"] - m["miou_none"]).tolist()
+            bgs += m["bg_fraction_tt"].tolist()
+        if len(gains) >= 3:
+            rho, p = stats.spearmanr(bgs, gains)
+        else:
+            rho, p = math.nan, math.nan
+        rows.append(
+            {
+                "dataset": ds,
+                "fam": fam,
+                "head": head,
+                "n_images": len(gains),
+                "mean_gain": float(pd.Series(gains).mean()) if gains else math.nan,
+                "mean_bg_fraction": float(pd.Series(bgs).mean()) if bgs else math.nan,
+                "spearman_rho": float(rho),
+                "p": float(p),
+            }
+        )
+    out = pd.DataFrame(rows)
+    # Dataset ordering claim: mean gain should be largest on the dataset with the largest bg
+    # fraction.
+    if not out.empty:
+        gain_rank = out.groupby(["fam", "head"])["mean_gain"].rank(ascending=False)
+        bg_rank = out.groupby(["fam", "head"])["mean_bg_fraction"].rank(ascending=False)
+        out["H3_rank_ok"] = gain_rank == bg_rank
+    return out
+
+
+def _plot_miou(summary: pd.DataFrame, path: Path) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+    s = summary.copy()
+    s["cell"] = (
+        s["dataset"] + "/" + s["fam"] + "/" + s["mode"] + "/" + s["registers"] + "/" + s["head"]
+    )
+    ax.bar(range(len(s)), s["final_miou_mean"], yerr=s["final_miou_std"].fillna(0), capsize=2)
+    ax.set_xticks(range(len(s)))
+    ax.set_xticklabels(s["cell"], rotation=90, fontsize=6)
+    ax.set_ylabel("final mIoU (mean over seeds)")
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def main(argv=None) -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--results", default="results")
+    ap.add_argument("--out", default="paper/tables")
+    a = ap.parse_args(argv)
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    df = collect(a.results)
+    if df.empty:
+        print("no finished runs under", a.results)
+        return
+    s = summarize(df)
+    s.to_csv(out / "summary.csv", index=False)
+    to_markdown(s, out / "summary.md")
+    to_markdown(h1(df), out / "h1.md")
+    to_markdown(h2(df), out / "h2.md")
+    to_markdown(h3(a.results, df), out / "h3.md")
+    _plot_miou(s, out / "miou_by_cell.png")
+    print(f"{len(df)} runs -> {out}")
+
+
+if __name__ == "__main__":
+    main()
