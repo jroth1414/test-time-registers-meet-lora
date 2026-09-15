@@ -34,7 +34,7 @@ def make_run(
     }
     (d / "config.yaml").write_text(yaml.safe_dump(cfg))
     metrics = {
-        "best_miou": miou,
+        "best_miou": miou + 0.005,
         "final_miou": miou,
         "pixel_acc": 0.9,
         "trainable_params": 100,

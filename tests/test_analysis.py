@@ -18,14 +18,16 @@ def test_collect_flattens_runs(tmp_path: Path):
         "attn_entropy_cls",
     } <= set(df.columns)
     row = df[(df["mode"] == "lora") & (df["registers"] == "test_time") & (df["seed"] == 1)].iloc[0]
-    assert abs(row["best_miou"] - 0.38) < 1e-9 and row["head"] == "linear"
+    assert abs(row["final_miou"] - 0.38) < 1e-9 and row["head"] == "linear"
+    assert abs(row["best_miou"] - 0.385) < 1e-9
 
 
 def test_summarize_mean_std_n(tmp_path: Path):
     s = summarize(collect(standard_tree(tmp_path)))
     r = s[(s["mode"] == "lora") & (s["registers"] == "none")].iloc[0]
-    assert abs(r["best_miou_mean"] - 0.345) < 1e-9 and r["n"] == 2 and r["best_miou_std"] > 0
-    assert abs(r["final_miou_mean"] - 0.345) < 1e-9
+    assert abs(r["final_miou_mean"] - 0.345) < 1e-9 and r["n"] == 2 and r["best_miou_std"] > 0
+    assert abs(r["best_miou_mean"] - 0.350) < 1e-9
+    assert r["head_params"] == 10
 
 
 def test_collect_forwards_extra_diagnostics_and_metrics(tmp_path: Path):

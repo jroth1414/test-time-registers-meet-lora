@@ -100,6 +100,8 @@ def summarize(df: pd.DataFrame) -> pd.DataFrame:
     out.columns = [f"{a}_{b}" for a, b in out.columns]
     out["n"] = g.size()
     out["trainable_params"] = g["trainable_params"].first()
+    if "head_params" in df.columns:
+        out["head_params"] = g["head_params"].first()
     return out.reset_index()
 
 
