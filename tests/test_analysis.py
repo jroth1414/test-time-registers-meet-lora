@@ -1,4 +1,5 @@
 import math
+import warnings
 from pathlib import Path
 
 from tests.fake_results import make_run, standard_tree
@@ -128,3 +129,45 @@ def test_h1_and_h2_clip_no_trained_arm(tmp_path: Path):
     assert math.isnan(row2["gap_closure"])
     assert not math.isnan(row2["tt_minus_none"])
     assert abs(row2["tt_minus_none"] - 0.04) < 1e-9
+
+
+def test_h1_and_h2_verdicts_are_plain_python_types_across_mixed_groups(tmp_path: Path):
+    # Three groups in one table so pandas cannot fall back on a homogeneous-dtype column:
+    # vits gets True (ratio near 1, gap negative), vitb gets False (ratio far from 1),
+    # clipb gets None (no frozen or trained arm at all).
+    standard_tree(tmp_path)
+    for s in (0, 1):
+        make_run(tmp_path, "ade20k", "vitb", "frozen", "none", s, 0.30 + 0.01 * s, 0.050)
+        make_run(tmp_path, "ade20k", "vitb", "lora", "none", s, 0.34 + 0.01 * s, 0.010)
+        make_run(tmp_path, "ade20k", "vitb", "lora", "trained", s, 0.39 + 0.01 * s, 0.002)
+        make_run(tmp_path, "ade20k", "clipb", "lora", "none", s, 0.30 + 0.01 * s, 0.048)
+        make_run(tmp_path, "ade20k", "clipb", "lora", "test_time", s, 0.34 + 0.01 * s, 0.004)
+    df = collect(tmp_path)
+
+    r1 = h1(df)
+    for _, row in r1.iterrows():
+        assert type(row["H1"]) in (bool, type(None))
+    r1 = r1.set_index("fam")
+    assert r1.loc["vits", "H1"] is True
+    assert abs(r1.loc["vitb", "outlier_ratio_lora_over_frozen"] - 0.20) < 1e-9
+    assert r1.loc["vitb", "H1"] is False
+    assert r1.loc["clipb", "H1"] is None
+
+    r2 = h2(df)
+    for _, row in r2.iterrows():
+        assert type(row["H2"]) in (bool, type(None))
+
+
+def test_paired_zero_variance_no_scipy_warning(tmp_path: Path):
+    df = collect(standard_tree(tmp_path))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        r = paired(
+            df,
+            "final_miou",
+            {"mode": "lora", "registers": "test_time"},
+            {"mode": "lora", "registers": "none"},
+        )
+    assert r["t"] == math.inf
+    assert r["p"] == 0.0
+    assert r["n"] == 2

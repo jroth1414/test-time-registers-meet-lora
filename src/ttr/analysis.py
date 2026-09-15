@@ -136,6 +136,12 @@ def paired(df: pd.DataFrame, key: str, a: dict, b: dict) -> dict:
             "p": math.nan,
             "n": n,
         }
+    if diff.std() == 0:
+        # Zero-variance differences make scipy's moment calculation emit a spurious
+        # "precision loss" RuntimeWarning; the t-statistic is well-defined without it.
+        t = math.inf if diff[0] != 0 else math.nan
+        p = 0.0 if diff[0] != 0 else math.nan
+        return {"mean_diff": float(diff.mean()), "t": t, "p": p, "n": n}
     t, p = stats.ttest_1samp(diff, 0.0)
     return {"mean_diff": float(diff.mean()), "t": float(t), "p": float(p), "n": n}
 
@@ -162,6 +168,7 @@ def h1(df: pd.DataFrame, tol: float = 0.2) -> pd.DataFrame:
             if not math.isnan(ratio) and gap["n"]
             else None
         )
+        verdict = bool(verdict) if verdict is not None else None
         rows.append(
             {
                 "dataset": ds,
@@ -203,7 +210,7 @@ def h2(df: pd.DataFrame, threshold: float = 0.5) -> pd.DataFrame:
                 "tt_minus_none": test["mean_diff"],
                 "p": test["p"],
                 "n": test["n"],
-                "H2": (closure >= threshold) if not math.isnan(closure) else None,
+                "H2": (bool(closure >= threshold) if not math.isnan(closure) else None),
             }
         )
     return pd.DataFrame(rows).astype({"H2": object})
