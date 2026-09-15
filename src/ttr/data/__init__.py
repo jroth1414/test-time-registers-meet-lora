@@ -6,12 +6,26 @@ from torch.utils.data import Dataset
 
 from ttr.config import DataCfg
 from ttr.data.ade20k import ADE20K_BACKGROUND_IDS, ADE20K_NUM_CLASSES, ade20k_label_fn, ade20k_pairs
+from ttr.data.cityscapes import (
+    CITYSCAPES_BACKGROUND_IDS,
+    CITYSCAPES_NUM_CLASSES,
+    cityscapes_label_fn,
+    cityscapes_pairs,
+)
 from ttr.data.folder import SegFolderDataset
 from ttr.data.synthetic import SYNTHETIC_NUM_CLASSES, SyntheticSegDataset
 from ttr.data.transforms import eval_transform, train_transform
 
-_NUM_CLASSES = {"ade20k": ADE20K_NUM_CLASSES, "synthetic": SYNTHETIC_NUM_CLASSES}
-_BACKGROUND = {"ade20k": ADE20K_BACKGROUND_IDS, "synthetic": [0]}
+_NUM_CLASSES = {
+    "ade20k": ADE20K_NUM_CLASSES,
+    "cityscapes": CITYSCAPES_NUM_CLASSES,
+    "synthetic": SYNTHETIC_NUM_CLASSES,
+}
+_BACKGROUND = {
+    "ade20k": ADE20K_BACKGROUND_IDS,
+    "cityscapes": CITYSCAPES_BACKGROUND_IDS,
+    "synthetic": [0],
+}
 
 
 def num_classes(name: str) -> int:
@@ -41,4 +55,10 @@ def build_dataset(cfg: DataCfg, split: str) -> Dataset:
         )
         imgs, labs = ade20k_pairs(cfg.root, split)
         return SegFolderDataset(imgs, labs, tf, ade20k_label_fn)
+    if cfg.name == "cityscapes":
+        tf = (train_transform if split == "train" else eval_transform)(
+            cfg.img_size, cfg.mean, cfg.std
+        )
+        imgs, labs = cityscapes_pairs(cfg.root, split)
+        return SegFolderDataset(imgs, labs, tf, cityscapes_label_fn)
     raise KeyError(f"unknown dataset {cfg.name!r}")
