@@ -21,5 +21,16 @@ to ImageNet statistics; the runner (`ttr.run`) overrides them from the backbone'
 `pretrained_cfg` via `normalization_for` before building any dataset and records the resolved
 values in the run's `config.yaml`, so CLIP runs use CLIP's own statistics.
 
-## Cityscapes and LaRS
-See chunk 9 of the plan; both need registration on the dataset websites.
+## Cityscapes
+Register at cityscapes-dataset.com, download `leftImg8bit_trainvaltest.zip` and
+`gtFine_trainvaltest.zip`, extract to `data/cityscapes/` so that
+`data/cityscapes/leftImg8bit/train/<city>/*.png` exists. 19 train ids; everything else is 255.
+Background classes for H3: road, wall, sky.
+
+## LaRS
+Register at lojzezust.github.io/lars-dataset, download images and semantic masks, place as
+`data/lars/{train,val}/{images,semantic_masks}/`. Run `python scripts/inspect_lars.py data/lars`
+and confirm the mask values match `LARS_RAW` in `ttr/data/lars.py`; edit the dict if not.
+Classes: obstacle 0, water 1, sky 2. Background classes for H3: water, sky.
+Our water-edge F1 and obstacle F1 are proxies; report official numbers from the LaRS toolkit
+in the paper.

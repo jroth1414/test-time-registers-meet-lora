@@ -36,3 +36,18 @@ def write_fake_cityscapes(root: Path, n: int = 2, size=(64, 128)) -> Path:
                     root / "gtFine" / split / city / f"{stem}_gtFine_labelIds.png"
                 )
     return root
+
+
+def write_fake_lars(root: Path, n: int = 2, size=(64, 96)) -> Path:
+    rng = np.random.default_rng(2)
+    for split in ("train", "val"):
+        (root / split / "images").mkdir(parents=True)
+        (root / split / "semantic_masks").mkdir(parents=True)
+        for i in range(n):
+            img = rng.integers(0, 255, (*size, 3), dtype=np.uint8)
+            lab = np.full(size, 1, dtype=np.uint8)  # water
+            lab[: size[0] // 3] = 2  # sky on top
+            lab[40:50, 30:40] = 0  # an obstacle
+            Image.fromarray(img).save(root / split / "images" / f"lars_{i:04d}.jpg")
+            Image.fromarray(lab).save(root / split / "semantic_masks" / f"lars_{i:04d}.png")
+    return root

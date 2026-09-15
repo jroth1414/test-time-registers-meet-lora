@@ -13,17 +13,25 @@ from ttr.data.cityscapes import (
     cityscapes_pairs,
 )
 from ttr.data.folder import SegFolderDataset
+from ttr.data.lars import (
+    LARS_BACKGROUND_IDS,
+    LARS_NUM_CLASSES,
+    lars_label_fn,
+    lars_pairs,
+)
 from ttr.data.synthetic import SYNTHETIC_NUM_CLASSES, SyntheticSegDataset
 from ttr.data.transforms import eval_transform, train_transform
 
 _NUM_CLASSES = {
     "ade20k": ADE20K_NUM_CLASSES,
     "cityscapes": CITYSCAPES_NUM_CLASSES,
+    "lars": LARS_NUM_CLASSES,
     "synthetic": SYNTHETIC_NUM_CLASSES,
 }
 _BACKGROUND = {
     "ade20k": ADE20K_BACKGROUND_IDS,
     "cityscapes": CITYSCAPES_BACKGROUND_IDS,
+    "lars": LARS_BACKGROUND_IDS,
     "synthetic": [0],
 }
 
@@ -61,4 +69,10 @@ def build_dataset(cfg: DataCfg, split: str) -> Dataset:
         )
         imgs, labs = cityscapes_pairs(cfg.root, split)
         return SegFolderDataset(imgs, labs, tf, cityscapes_label_fn)
+    if cfg.name == "lars":
+        tf = (train_transform if split == "train" else eval_transform)(
+            cfg.img_size, cfg.mean, cfg.std
+        )
+        imgs, labs = lars_pairs(cfg.root, split)
+        return SegFolderDataset(imgs, labs, tf, lars_label_fn)
     raise KeyError(f"unknown dataset {cfg.name!r}")
