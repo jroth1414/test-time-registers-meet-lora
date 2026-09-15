@@ -62,14 +62,20 @@ def make_run(
 
 
 def standard_tree(root: Path):
-    """DINOv2-S on ade20k, 2 seeds. Numbers chosen so H1 and H2 hold."""
+    """DINOv2-S on ade20k, 2 seeds. Numbers chosen so H1 and H2 hold.
+
+    The registered LoRA arms carry a per-seed jitter of +/- 0.001 so the paired
+    differences against `lora/none` have non-zero variance and scipy returns a real
+    p value. Cell means stay 0.305 / 0.345 / 0.375 / 0.395.
+    """
     for s in (0, 1):
+        j = 0.001 if s else -0.001
         make_run(root, "ade20k", "vits", "frozen", "none", s, 0.30 + 0.01 * s, 0.050)
         make_run(
             root, "ade20k", "vits", "lora", "none", s, 0.34 + 0.01 * s, 0.048
         )  # outliers persist
         make_run(
-            root, "ade20k", "vits", "lora", "test_time", s, 0.37 + 0.01 * s, 0.004
+            root, "ade20k", "vits", "lora", "test_time", s, 0.37 + 0.01 * s + j, 0.004
         )  # closes 60% of gap
-        make_run(root, "ade20k", "vits", "lora", "trained", s, 0.39 + 0.01 * s, 0.002)
+        make_run(root, "ade20k", "vits", "lora", "trained", s, 0.39 + 0.01 * s + j, 0.002)
     return root
