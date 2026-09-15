@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 
 from ttr.backbone import Backbone, build_backbone, normalization_for
 from ttr.config import RunCfg, load_config, save_config
-from ttr.data import background_class_ids, build_dataset, num_classes
+from ttr.data import background_class_ids, build_dataset, extra_metrics_fn, num_classes
 from ttr.heads import build_head
 from ttr.lora import apply_lora, count_params, lora_state_dict, set_trainable
 from ttr.metrics import (
@@ -140,7 +140,15 @@ def train_one_epoch(
 
 @torch.no_grad()
 def evaluate(
-    bb, head, loader, num_cls: int, bg_ids: list[int], device, amp: bool, per_image_path=None
+    bb,
+    head,
+    loader,
+    num_cls: int,
+    bg_ids: list[int],
+    device,
+    amp: bool,
+    per_image_path=None,
+    extra_fn=None,
 ) -> dict:
     head.eval()
     bb.eval()
@@ -148,27 +156,42 @@ def evaluate(
     if per_image_path is not None and Path(per_image_path).exists():
         Path(per_image_path).unlink()
     idx = 0
+    extra_sums: dict[str, float] = {}
+    extra_counts: dict[str, int] = {}
     for x, y in loader:
         x, y = x.to(device), y.to(device)
         with _autocast(device, amp):
             pred = head(bb.forward_features(x), tuple(y.shape[-2:])).argmax(1)
         meter.update(pred, y)
-        if per_image_path is not None:
+        if per_image_path is not None or extra_fn is not None:
             for p, t in zip(pred, y, strict=True):
-                append_csv_row(
-                    per_image_path,
-                    {
-                        "index": idx,
-                        "miou": image_miou(p, t, num_cls),
-                        "bg_fraction": background_fraction(t, bg_ids),
-                    },
-                )
+                extras = extra_fn(p, t) if extra_fn else {}
+                for ek, ev in extras.items():
+                    extra_sums.setdefault(ek, 0.0)
+                    extra_counts.setdefault(ek, 0)
+                    if math.isfinite(ev):
+                        extra_sums[ek] += ev
+                        extra_counts[ek] += 1
+                if per_image_path is not None:
+                    append_csv_row(
+                        per_image_path,
+                        {
+                            "index": idx,
+                            "miou": image_miou(p, t, num_cls),
+                            "bg_fraction": background_fraction(t, bg_ids),
+                            **extras,
+                        },
+                    )
                 idx += 1
-    return {
+    out = {
         "miou": meter.miou(),
         "pixel_acc": meter.pixel_acc(),
         "per_class_iou": meter.per_class_iou(),
     }
+    for ek in extra_sums:
+        cnt = extra_counts[ek]
+        out[f"extra_{ek}"] = extra_sums[ek] / cnt if cnt > 0 else math.nan
+    return out
 
 
 def _loaders(cfg: RunCfg):
@@ -226,6 +249,8 @@ def run(cfg: RunCfg, force: bool = False) -> dict:
     k = num_classes(cfg.data.name)
     bg = background_class_ids(cfg.data.name)
 
+    extra_fn = extra_metrics_fn(cfg.data.name)
+
     groups = [{"params": head.parameters(), "lr": cfg.train.lr}]
     bb_params = [p for p in bb.parameters() if p.requires_grad]
     if bb_params:
@@ -253,7 +278,7 @@ def run(cfg: RunCfg, force: bool = False) -> dict:
                 loss, n_skipped = train_one_epoch(
                     bb, head, train_loader, opt, sched, device, cfg.train.amp, cfg.train.mode
                 )
-            ev = evaluate(bb, head, val_loader, k, bg, device, cfg.train.amp)
+            ev = evaluate(bb, head, val_loader, k, bg, device, cfg.train.amp, extra_fn=extra_fn)
             best = max(best, ev["miou"])
             append_csv_row(
                 run_dir / "log.csv",
@@ -282,7 +307,15 @@ def run(cfg: RunCfg, force: bool = False) -> dict:
     }
     torch.save(last_state, run_dir / "head_lora.pt")
     final = evaluate(
-        bb, head, val_loader, k, bg, device, cfg.train.amp, per_image_path=run_dir / "per_image.csv"
+        bb,
+        head,
+        val_loader,
+        k,
+        bg,
+        device,
+        cfg.train.amp,
+        per_image_path=run_dir / "per_image.csv",
+        extra_fn=extra_fn,
     )
 
     metrics = {
@@ -297,6 +330,7 @@ def run(cfg: RunCfg, force: bool = False) -> dict:
         "head_params": info["head_params"],
         "wall_seconds": wall.seconds,
     }
+    metrics.update({k_: v for k_, v in final.items() if k_.startswith("extra_")})
 
     if cfg.diagnostics:
         bb.eval()

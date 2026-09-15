@@ -34,3 +34,19 @@ def test_factorial_mask_head_suffix(tmp_path):
     assert all(p.name.endswith("__mask.yaml") for p in paths)
     cfg = load_config(str(paths[0]))
     assert cfg.head.type == "mask"
+
+
+def test_factorial_high_res_datasets_use_448(tmp_path):
+    p = write_configs(tmp_path, dataset="lars", seeds=[0], epochs=1, root="data/lars")[0]
+    cfg = yaml.safe_load(p.read_text())
+    assert cfg["data"]["img_size"] == 448 and cfg["backbone"]["img_size"] == 448
+    assert cfg["data"]["batch_size"] == 8
+
+
+def test_factorial_lars_test_time_uses_res448_neuron_maps(tmp_path):
+    paths = write_configs(tmp_path, dataset="lars", seeds=[0], epochs=1, root="data/lars")
+    tt_paths = [p for p in paths if "__test_time__" in p.name]
+    assert tt_paths
+    for p in tt_paths:
+        reg_path = yaml.safe_load(p.read_text())["backbone"]["register_neuron_path"]
+        assert "artifacts/res448/" in reg_path

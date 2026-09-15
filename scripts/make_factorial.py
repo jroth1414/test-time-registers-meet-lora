@@ -41,9 +41,12 @@ def cell_config(
     head: str = "linear",
 ) -> dict:
     name = BACKBONES[fam]["trained" if reg == "trained" else "none"]
+    img = 448 if dataset in ("cityscapes", "lars") else 224
+    batch = 8 if img == 448 else 16
+    res = "res448" if img == 448 else "res224"
     reg_path = None
     if reg == "test_time":
-        reg_path = f"artifacts/res224/register_neurons/{name.replace('.', '_')}.json"
+        reg_path = f"artifacts/{res}/register_neurons/{name.replace('.', '_')}.json"
     run_id = f"{dataset}__{fam}__{mode}__{reg}__s{seed}"
     if head == "mask":
         run_id += "__mask"
@@ -51,7 +54,7 @@ def cell_config(
         "run_id": run_id,
         "backbone": {
             "name": name,
-            "img_size": 224,
+            "img_size": img,
             "registers": reg,
             "num_test_time_registers": 1,
             "outlier_layer": OUTLIER_LAYER[fam],
@@ -67,8 +70,8 @@ def cell_config(
         "data": {
             "name": dataset,
             "root": root,
-            "img_size": 224,
-            "batch_size": 16,
+            "img_size": img,
+            "batch_size": batch,
             "num_workers": 4,
             "calib_images": 64,
         },

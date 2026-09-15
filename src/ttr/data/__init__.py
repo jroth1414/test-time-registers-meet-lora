@@ -48,6 +48,14 @@ def background_class_ids(name: str) -> list[int]:
     return list(_BACKGROUND[name])
 
 
+def extra_metrics_fn(name: str):
+    if name == "lars":
+        from ttr.metrics_lars import lars_extra_metrics
+
+        return lars_extra_metrics
+    return None
+
+
 def build_dataset(cfg: DataCfg, split: str) -> Dataset:
     if cfg.name not in _NUM_CLASSES:
         raise KeyError(f"unknown dataset {cfg.name!r}")

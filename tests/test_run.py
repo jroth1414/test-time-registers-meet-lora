@@ -273,6 +273,15 @@ def test_cli_force_flag_reruns(tmp_results: Path, capsys):
     assert "'skipped': False" in capsys.readouterr().out
 
 
+def test_evaluate_extra_metrics_are_reported(tmp_results: Path):
+    cfg = _cfg()
+    dev = torch.device("cpu")
+    bb, head, _ = build_model(cfg, dev, _calib_loader(), tmp_results)
+    va = torch.utils.data.DataLoader(build_dataset(cfg.data, "val"), batch_size=8)
+    out = evaluate(bb, head, va, 4, [0], dev, amp=False, extra_fn=lambda p, t: {"dummy": 1.0})
+    assert out["extra_dummy"] == 1.0
+
+
 def test_run_full_mode_saves_backbone(tmp_results: Path):
     cfg = _cfg(
         f"out_dir={tmp_results.as_posix()}",

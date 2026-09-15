@@ -1,0 +1,34 @@
+run_id: lars__vitb__full__trained__s1
+backbone:
+  name: vit_base_patch14_reg4_dinov2.lvd142m
+  img_size: 448
+  registers: trained
+  num_test_time_registers: 1
+  outlier_layer: 8
+  register_neuron_path: null
+lora:
+  enabled: false
+  r: 8
+  alpha: 16.0
+  targets:
+  - q
+  - v
+head:
+  type: linear
+  hidden: 256
+data:
+  name: lars
+  root: data/lars
+  img_size: 448
+  batch_size: 8
+  num_workers: 4
+  calib_images: 64
+train:
+  mode: full
+  epochs: 10
+  lr: 0.001
+  lr_backbone: 1.0e-05
+  amp: true
+  grad_checkpoint: true
+  seed: 1
+diagnostics: true
