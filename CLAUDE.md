@@ -123,6 +123,11 @@ The paper is a 3 x 3 factorial per backbone, run on three datasets, three seeds 
 - **Sanity runs** (5 epochs, one seed) live under `results/sanity/` and are excluded from the
   analysis; real cells are 10 epochs, three seeds, under `results/<run_id>/`. Run
   `scripts/run_sweep.ps1 -Filter frozen` before any LoRA or full cell.
+- **Hyper-parameter sweep runs** (rank, target modules, register count, layer subset, learning
+  rate) write to `results/sweeps/<name>/`, never to `results/` directly. `ttr.analysis.collect`
+  accepts only factorial run ids (`{dataset}__{fam}__{mode}__{reg}__s{seed}` plus an optional
+  `__mask`) and skips any other directory with a message, so a stray sweep run can never enter
+  a headline mean.
 
 Sequence the work so the draft deadline is safe: reproduce Jiang et al. and the outlier diagnostics
 first (weeks 1-2), then the full ADE20K factorial (weeks 3-6), then Cityscapes and LaRS.
