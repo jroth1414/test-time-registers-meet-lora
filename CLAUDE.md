@@ -46,7 +46,7 @@ docs/project_rubric_transformers.png       grading rubric (local only, gitignore
 docs/research_ideas.md                     idea shortlist A-G with venue/timing analysis
 docs/research_ideas_applied.md             applied ideas H-N tied to CVPR/WACV workshops
 proposal/proposal.tex                      one-page proposal (LaTeX + TikZ block diagram)
-proposal/proposal.pdf                      compiled proposal, the file that gets uploaded
+proposal/proposal_roth.pdf                 compiled proposal, the file that was uploaded (rebuild writes proposal.pdf; rename it)
 ```
 
 Keep the root to CLAUDE.md, config files, and top-level directories; reference material goes
