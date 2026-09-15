@@ -197,3 +197,49 @@ def test_cli_no_finished_runs_returns_without_writing_tables(tmp_path: Path):
     out = tmp_path / "out"
     main(["--results", str(empty_results), "--out", str(out)])
     assert not (out / "summary.md").exists()
+
+
+def test_h3_keeps_images_with_nan_maritime_metrics(tmp_path: Path):
+    # LaRS per_image.csv carries water_edge_f1/obstacle_f1, which metrics_lars.py leaves NaN
+    # for an image with no water boundary or no obstacle pixels (a normal image, not bad data).
+    # A blanket dropna() must not drop those rows from the Spearman sample.
+    d_none = make_run(tmp_path, "lars", "vits", "lora", "none", 0, 0.5, 0.05)
+    d_tt = make_run(tmp_path, "lars", "vits", "lora", "test_time", 0, 0.55, 0.01)
+    (d_none / "per_image.csv").write_text(
+        "index,miou,bg_fraction,water_edge_f1,obstacle_f1\n"
+        "0,0.5,0.1,0.8,\n"
+        "1,0.5,0.5,,0.6\n"
+        "2,0.5,0.9,0.75,0.65\n"
+    )
+    (d_tt / "per_image.csv").write_text(
+        "index,miou,bg_fraction,water_edge_f1,obstacle_f1\n"
+        "0,0.51,0.1,0.8,\n"
+        "1,0.55,0.5,,0.6\n"
+        "2,0.60,0.9,0.75,0.65\n"
+    )
+    df = collect(tmp_path)
+    r = h3(tmp_path, df).iloc[0]
+    assert r["n_images"] == 3
+    assert not math.isnan(r["spearman_rho"])
+
+
+def test_h3_constant_gain_no_scipy_warning(tmp_path: Path):
+    per_none = [(0.5, 0.1), (0.5, 0.5), (0.5, 0.9)]
+    per_tt = [(0.55, 0.1), (0.55, 0.5), (0.55, 0.9)]  # constant gain: 0.05 everywhere
+    make_run(tmp_path, "lars", "vits", "lora", "none", 0, 0.5, 0.05, per_image=per_none)
+    make_run(tmp_path, "lars", "vits", "lora", "test_time", 0, 0.55, 0.01, per_image=per_tt)
+    df = collect(tmp_path)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        r = h3(tmp_path, df).iloc[0]
+    assert math.isnan(r["spearman_rho"])
+
+
+def test_h3_rank_ok_none_without_per_image_evidence(tmp_path: Path):
+    # standard_tree writes no per_image.csv anywhere, so its h3 row has no gains/backgrounds
+    # to correlate; H3_rank_ok must be None (not False) rather than asserting a spurious verdict.
+    df = collect(standard_tree(tmp_path))
+    r = h3(tmp_path, df).iloc[0]
+    assert math.isnan(r["mean_gain"]) and math.isnan(r["mean_bg_fraction"])
+    assert r["H3_rank_ok"] is None
+    assert type(r["H3_rank_ok"]) in (bool, type(None))

@@ -235,12 +235,19 @@ def h3(results_root: str | Path, df: pd.DataFrame) -> pd.DataFrame:
             if not (pa.exists() and pb.exists()):
                 continue
             da, db = pd.read_csv(pa), pd.read_csv(pb)
-            m = da.merge(db, on="index", suffixes=("_tt", "_none")).dropna()
+            m = da.merge(db, on="index", suffixes=("_tt", "_none"))
+            # Drop only rows missing the columns h3 actually uses: LaRS per-image CSVs also
+            # carry water_edge_f1/obstacle_f1, which metrics_lars.py legitimately leaves NaN for
+            # images with no water boundary or no obstacle pixels (not bad data), and a blanket
+            # dropna() would silently drop those images from the Spearman sample.
+            m = m.dropna(subset=["miou_tt", "miou_none", "bg_fraction_tt"])
             gains += (m["miou_tt"] - m["miou_none"]).tolist()
             bgs += m["bg_fraction_tt"].tolist()
-        if len(gains) >= 3:
+        if len(gains) >= 3 and pd.Series(bgs).nunique() >= 2 and pd.Series(gains).nunique() >= 2:
             rho, p = stats.spearmanr(bgs, gains)
         else:
+            # Fewer than 3 pairs, or constant background/gain: scipy would emit a
+            # ConstantInputWarning (a RuntimeWarning subclass) for the latter, so skip the call.
             rho, p = math.nan, math.nan
         rows.append(
             {
@@ -255,12 +262,17 @@ def h3(results_root: str | Path, df: pd.DataFrame) -> pd.DataFrame:
             }
         )
     out = pd.DataFrame(rows)
-    # Dataset ordering claim: mean gain should be largest on the dataset with the largest bg
-    # fraction.
+    # Dataset ordering claim: within each (fam, head) group, the mean gain should rank the same
+    # as the mean background fraction. None (not False) when a group has no per-image evidence.
     if not out.empty:
         gain_rank = out.groupby(["fam", "head"])["mean_gain"].rank(ascending=False)
         bg_rank = out.groupby(["fam", "head"])["mean_bg_fraction"].rank(ascending=False)
-        out["H3_rank_ok"] = gain_rank == bg_rank
+        has_evidence = out["mean_gain"].notna() & out["mean_bg_fraction"].notna()
+        rank_ok = gain_rank == bg_rank
+        out["H3_rank_ok"] = [
+            bool(ok) if ev else None for ok, ev in zip(rank_ok, has_evidence, strict=True)
+        ]
+        out = out.astype({"H3_rank_ok": object})
     return out
 
 
