@@ -1,0 +1,36 @@
+{
+  "attn_entropy": {
+    "cls": 2.55435848236084,
+    "patch": 3.603572130203247,
+    "tt_reg": null
+  },
+  "images_per_s": 1104.3637554020977,
+  "norm_quantiles": {
+    "max": 416.98870849609375,
+    "q50": 8.791715621948242,
+    "q99": 11.10268783569336,
+    "q999": 376.5661926269531
+  },
+  "norm_ratio_max": 47.42973117272976,
+  "norm_ratio_p999": 42.831935064740655,
+  "num_register_neurons": 0,
+  "outlier_fraction": 0.005462646484375,
+  "outlier_fraction_last_layer": 0.8624725341796875,
+  "outlier_fraction_recalibrated": 0.0044097900390625,
+  "outlier_stats": {
+    "k": 4.0,
+    "layer": 8,
+    "mad": 0.5270624160766602,
+    "median": 8.44763469696045,
+    "tau": 11.573325649261474
+  },
+  "outlier_stats_post": {
+    "k": 4.0,
+    "layer": 8,
+    "mad": 0.5416288375854492,
+    "median": 8.791715621948242,
+    "tau": 12.00379128036499
+  },
+  "recalibrated": true,
+  "throughput_dtype": "bf16"
+}
